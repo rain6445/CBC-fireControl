@@ -1,6 +1,11 @@
 --[[======================================================================
     自动火控 (仅偏航电机控制)
-    v2.3.2
+    v2.3.4 
+======================================================================
+    改动日志:
+    - [优化] 调整了主控制循环 (runCt) 在活动状态下的频率，从每 0.05 秒执行一次瞄准计算调整为每 0.1 秒。
+    - [优化] 调整了红石控制循环 (runRedstoneControl) 的频率，从每 0.05 秒检查一次红石输入调整为每 0.1 秒。
+    - [配置] 偏航电机的默认PID参数调整为 P=300.0, I=0.0, D=40.0。
 ======================================================================]]
 
 -- 尝试打开 modem
@@ -31,9 +36,9 @@ function system.reset()
         lock_yaw_range = 0, 
         lock_yaw_face = "east", 
         yaw_torque = 50.0, 
-        pid_p = 40.0, 
-        pid_i = 0.0, 
-        pid_d = 40.0, -- 设置PID为40, 0, 40
+        pid_p = 300.0, -- **已修改：P参数调整为 300.0**
+        pid_i = 0.0,   -- **已修改：I参数调整为 0.0**
+        pid_d = 40.0,  -- **已修改：D参数调整为 40.0**
         invertYawMotor = false, 
         yawDirectionOffset = 0 -- 偏航校准偏移量，不影响复位角度
     } 
@@ -224,7 +229,7 @@ local function sendRequest()
             -- 移除 bullets_count 和 cross_point
             rednet.send(targetId,{name=properties.cannonName,pw=properties.password,slug=slug},request_protocol);
         end
-        sleep(0.05)
+        sleep(0.05) -- 保持此处的发送频率不变，因为这是火控向CC报告自身状态的频率
     end 
 end
 
@@ -297,7 +302,7 @@ local function runCt()
                 finalCommandYaw_rad = ultimate_target_yaw_rad 
             end
             
-            sleep(0.05) -- 高频更新
+            sleep(0.1) -- **已修改：活动状态下每 0.1 秒更新一次**
         else
             -- [[ 性能 ]] 闲置时，仅执行重置逻辑并大幅增加休眠时间
             finalCommandYaw_rad = _yawResetAngle_rad
@@ -359,7 +364,7 @@ local function runRedstoneControl()
             end
         end
         
-        sleep(0.05) -- 防止忙循环，允许其他并行任务运行
+        sleep(0.1) -- **已修改：每 0.1 秒检查一次红石输入/输出**
     end
 end
 
