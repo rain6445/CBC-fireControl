@@ -1,6 +1,6 @@
 --[[======================================================================
-    自动火控 (仅偏航电机控制)
-    v2.3.2
+    自动火控
+    v1.2.1 
 ======================================================================]]
 
 -- 尝试打开 modem
@@ -18,24 +18,33 @@ function system.reset()
     return { 
         cannonName = "CBC", 
         controlCenterId = "", -- 默认Center ID为空字符串，避免无效发送
-        redstoneOutputSide = "top", -- 新增：默认红石输出面
-        redstoneCooldown = 0.5, -- 新增：红石输出冷却时间，默认0.5秒
-        minRedstoneYawAngle = -10, -- 新增：红石禁区最小偏航角，默认-10度
-        maxRedstoneYawAngle = 10,  -- 新增：红石禁区最大偏航角，默认10度
-        cannonOffset = { x = 0, y = 3, z = 0 }, -- 保留用于校准偏航电机在船体上的物理位置，y轴固定为3
+        fire_side = "top", 
+        fireCooldown = 0.2, 
+        cannonOffset = { x = 0, y = 3, z = 0 }, 
+        minPitchAngle = -45, 
+        maxPitchAngle = 60, 
         minYawAngle = -90, 
         maxYawAngle = 90, -- 默认偏航禁区范围，以便增量绕行生效
         yawResetAngle = 0, 
+        pitchResetAngle = 0,
         face = "west", 
         password = "123456", 
+        inversion = false, 
         lock_yaw_range = 0, 
         lock_yaw_face = "east", 
+        velocity = 160, 
+        barrelLength = 8, 
+        forecast = 4, -- Forecast 默认值改为 4 (实际计算时会乘以4，即 16)
+        shellType = "standard", -- 新增炮弹类型设置，默认 "standard"
         yaw_torque = 50.0, 
+        pitch_torque = 50.0, -- 平衡的扭矩默认值
         pid_p = 40.0, 
         pid_i = 0.0, 
         pid_d = 40.0, -- 设置PID为40, 0, 40
         invertYawMotor = false, 
-        yawDirectionOffset = 0 -- 偏航校准偏移量，不影响复位角度
+        invertPitchMotor = false, 
+        yawDirectionOffset = 0, -- 偏航校准偏移量，不影响复位角度
+        pitchDirectionOffset = 0 -- 俯仰校准偏移量，不影响复位角度
     } 
 end
 
@@ -68,7 +77,7 @@ end
 system.init()
 
 -- 外设初始化
-local yawMotor
+local yawMotor, pitchMotor
 
 -- 更新电机PID和扭矩参数的函数 (在UI更改后调用)
 local function updateMotorParameters()
@@ -77,17 +86,47 @@ local function updateMotorParameters()
     local i_val = tonumber(properties.pid_i) or 0
     local d_val = tonumber(properties.pid_d) or 0
     local yaw_t_val = tonumber(properties.yaw_torque) or 0
+    local pitch_t_val = tonumber(properties.pitch_torque) or 0
 
     if yawMotor then
         yawMotor.setPID(p_val, i_val, d_val)
         yawMotor.setOutputTorque(yaw_t_val)
         yawMotor.setIsAdjustingAngle(true) -- 确保模式是角度调整
     end
+    if pitchMotor then
+        pitchMotor.setPID(p_val, i_val, d_val)
+        pitchMotor.setOutputTorque(pitch_t_val)
+        pitchMotor.setIsAdjustingAngle(true) -- 确保模式是角度调整
+    end
+end
+
+-- 选择俯仰电机的函数
+local function selectPitchMotor(exclude) 
+    term.clear(); term.setCursorPos(1, 1); print("--- Pitch Motor Selection ---"); 
+    local motors = {}; 
+    local names = peripheral.getNames(); 
+    if names then 
+        for _, n in ipairs(names) do 
+            if peripheral.getType(n) == "servo" and n ~= exclude then table.insert(motors, n) end 
+        end 
+    end; 
+    if #motors == 0 then print("Error: No other servo motors found!"); return nil end; 
+    if #motors == 1 then print("Auto-selecting motor: '" .. motors[1] .. "'"); sleep(2); return peripheral.wrap(motors[1]) end; 
+    print("Select motor for pitch:"); 
+    for i, n in ipairs(motors) do print(i .. ": " .. n) end; 
+    local choice; 
+    while true do 
+        write("Enter number: "); 
+        local i = read(); 
+        choice = tonumber(i); 
+        if choice and choice >= 1 and choice <= #motors then break else print("Invalid.") end 
+    end; 
+    print("Selected '" .. motors[choice] .. "'"); sleep(1); return peripheral.wrap(motors[choice]) 
 end
 
 -- 初始化电机
 local function initializeMotors() 
-    term.clear(); term.setCursorPos(1, 1); print("--- Initializing Yaw Motor... ---"); 
+    term.clear(); term.setCursorPos(1, 1); print("--- Initializing motors... ---"); 
     yawMotor = peripheral.wrap("back"); 
     if not yawMotor then print("Fatal Error: Yaw motor 'back' not found!"); return false end; 
     -- 使用 properties 中的 PID 和 Torque 值，并确保是数字
@@ -95,7 +134,15 @@ local function initializeMotors()
     yawMotor.setIsAdjustingAngle(true); 
     yawMotor.setOutputTorque(tonumber(properties.yaw_torque) or 0); 
     print("Yaw motor OK."); 
-    print("\n--- Yaw motor ready ---"); sleep(2); return true 
+    
+    pitchMotor = selectPitchMotor("back"); 
+    if not pitchMotor then print("Fatal Error: No pitch motor!"); return false end; 
+    -- 使用 properties 中的 PID 和 Torque 值，并确保是数字
+    pitchMotor.setPID(tonumber(properties.pid_p) or 0, tonumber(properties.pid_i) or 0, tonumber(properties.pid_d) or 0); 
+    pitchMotor.setIsAdjustingAngle(true); 
+    pitchMotor.setOutputTorque(tonumber(properties.pitch_torque) or 0); 
+    print("Pitch motor OK."); 
+    print("\n--- All motors ready ---"); sleep(2); return true 
 end
 if not initializeMotors() then return end
 
@@ -104,49 +151,71 @@ local function wrapToPi(a) return (a + PI) % TWO_PI - PI end
 local function quatMultiply(q1, q2) return {w=-q1.x*q2.x-q1.y*q2.y-q1.z*q2.z+q1.w*q2.w,x=q1.x*q2.w+q1.y*q2.z-q1.z*q2.y+q1.w*q2.x,y=-q1.x*q2.z+q1.y*q2.w+q1.z*q2.x+q1.w*q2.y,z=q1.x*q2.y-q1.y*q2.x+q1.z*q2.w+q1.w*q2.z} end
 local function RotateVectorByQuat(q,v) local x,y,z=q.x*2,q.y*2,q.z*2;local xx,yy,zz=q.x*x,q.y*y,q.z*z;local xy,xz,yz=q.x*y,q.x*z,q.y*z;local wx,wy,wz=q.w*x,q.w*y,q.w*z;return{x=(1-(yy+zz))*v.x+(xy-wz)*v.y+(xz+wy)*v.z,y=(xy+wz)*v.x+(1-(xx+zz))*v.y+(yz-wx)*v.z,z=(xz-wy)*v.x+(yz+wx)*v.y+(1-(xx+yy))*v.z} end
 local function negaQ(q) return {w=q.w,x=-q.x,y=-q.y,z=-q.z} end
--- getCannonPos 现在是获取偏航电机在世界坐标系中的位置
-local function getCannonPos() 
-    local w=ship.getWorldspacePosition();
-    local y=ship.getShipyardPosition();
-    local s=coordinate.getAbsoluteCoordinates();
-    -- cannonOffset.y 仍然用于计算，但不再从UI调整
-    local o={x=y.x-s.x-0.5-properties.cannonOffset.x,y=y.y-s.y-0.5-properties.cannonOffset.y,z=y.z-s.z-0.5-properties.cannonOffset.z};
-    o=RotateVectorByQuat(ship.getQuaternion(),o);
-    return{x=w.x-o.x,y=w.y-o.y,z=w.z-o.z} 
-end
+local function getCannonPos() local w=ship.getWorldspacePosition();local y=ship.getShipyardPosition();local s=coordinate.getAbsoluteCoordinates();local o={x=y.x-s.x-0.5-properties.cannonOffset.x,y=y.y-s.y-0.5-properties.cannonOffset.y,z=y.z-s.z-0.5-properties.cannonOffset.z};o=RotateVectorByQuat(ship.getQuaternion(),o);return{x=w.x-o.x,y=w.y-o.y,z=w.z-o.z} end
 
 -- 优化：将这些计算值提取为局部变量，在配置更新时刷新
-local _minYawAngle_rad, _maxYawAngle_rad
-local _yawResetAngle_rad
-local _yawDirectionOffset_rad
+local _barrelLength, _velocity_per_tick, _drag_factor, _gravity, _forecast
+local _minPitchAngle_rad, _maxPitchAngle_rad, _minYawAngle_rad, _maxYawAngle_rad
+local _yawResetAngle_rad, _pitchResetAngle_rad
+local _yawDirectionOffset_rad, _pitchDirectionOffset_rad
 local _lock_yaw_range_rad
-local _redstoneCooldown -- 红石冷却时间
-local _minRedstoneYawAngle_rad, _maxRedstoneYawAngle_rad -- 新增：红石禁区角度
+local _fireCooldown
 
 -- 刷新配置值，处理数字转换和默认值回退
 local function refreshConfigValues()
     local defaults = system.reset() -- 获取默认值以备回退
 
+    _barrelLength = tonumber(properties.barrelLength) or defaults.barrelLength
+    _velocity_per_tick = (tonumber(properties.velocity) or defaults.velocity) / 20 -- 预先除以20
+    _forecast = (tonumber(properties.forecast) or defaults.forecast) * 4 -- Forecast 输入值乘以 4
+
+    -- 根据炮弹类型设置重力和阻力
+    if properties.shellType == "standard" then
+        _gravity = 0.05
+        _drag_factor = 1 - 0.01 -- drag = 0.01
+    elseif properties.shellType == "heavier" then
+        _gravity = 0.15
+        _drag_factor = 1 - 0.012 -- drag = 0.012
+    else -- 默认值以防万一
+        _gravity = 0.05
+        _drag_factor = 1 - 0.01
+    end
+
+    _minPitchAngle_rad = math.rad(tonumber(properties.minPitchAngle) or defaults.minPitchAngle)
+    _maxPitchAngle_rad = math.rad(tonumber(properties.maxPitchAngle) or defaults.maxPitchAngle)
     _minYawAngle_rad = math.rad(tonumber(properties.minYawAngle) or defaults.minYawAngle)
     _maxYawAngle_rad = math.rad(tonumber(properties.maxYawAngle) or defaults.maxYawAngle)
     _yawResetAngle_rad = math.rad(tonumber(properties.yawResetAngle) or defaults.yawResetAngle)
+    _pitchResetAngle_rad = math.rad(tonumber(properties.pitchResetAngle) or defaults.pitchResetAngle)
     
-    -- 校准偏移量
+    -- 校准偏移量，不影响复位角度
     _yawDirectionOffset_rad = math.rad(tonumber(properties.yawDirectionOffset) or defaults.yawDirectionOffset)
+    _pitchDirectionOffset_rad = math.rad(tonumber(properties.pitchDirectionOffset) or defaults.pitchDirectionOffset)
     
     _lock_yaw_range_rad = math.rad(tonumber(properties.lock_yaw_range) or defaults.lock_yaw_range)
+    _fireCooldown = tonumber(properties.fireCooldown) or defaults.fireCooldown
     
-    -- Cannon Offset 的 x 和 z 也要进行安全转换
+    -- Cannon Offset 也要进行安全转换
     properties.cannonOffset.x = tonumber(properties.cannonOffset.x) or defaults.cannonOffset.x
-    -- properties.cannonOffset.y 不再从UI调整，保持其在properties中的数字值
+    properties.cannonOffset.y = tonumber(properties.cannonOffset.y) or defaults.cannonOffset.y
     properties.cannonOffset.z = tonumber(properties.cannonOffset.z) or defaults.cannonOffset.z
-    
-    -- redstoneOutputSide 是字符串，无需 tonumber
-    _redstoneCooldown = tonumber(properties.redstoneCooldown) or defaults.redstoneCooldown
-    _minRedstoneYawAngle_rad = math.rad(tonumber(properties.minRedstoneYawAngle) or defaults.minRedstoneYawAngle)
-    _maxRedstoneYawAngle_rad = math.rad(tonumber(properties.maxRedstoneYawAngle) or defaults.maxRedstoneYawAngle)
 end
 refreshConfigValues() -- 首次加载时刷新一次
+
+local function getTime(d,p) 
+    local bl=_barrelLength;local cP=math.abs(math.cos(p));d=d-bl*cP;local v0=_velocity_per_tick;local dr=_drag_factor;
+    if dr<0.001 or dr>0.999 then return d/(cP*v0) else local la=1-d/(100*(cP*v0));if la<=0 then return math.huge else return math.abs(math.log(la)/(math.log(dr)/math.log(math.exp(1)))) end end 
+end
+local function getY2(t,y0,p) 
+    if t>10000 then return 0 end;local g=_gravity;local sP=math.sin(p);local bl=_barrelLength;
+    y0=bl*sP+y0;local v0=_velocity_per_tick;local Vy=v0*sP;local dr=_drag_factor;
+    if dr<0.001 then dr=1 end;local i=1;local last=0;while i<t+1 do y0=y0+Vy;Vy=dr*Vy-g;if i==math.floor(t) then last=y0 end;i=i+1 end;local floor_t=math.floor(t);if floor_t<1 then return y0 end;return(y0-last)*(t%floor_t)+last 
+end
+local function ag_binary_search(arr,xD,y0,yD) 
+    local l,h=1,#arr;local m,t,p,r=0,0,0,0;
+    while l<=h do m=math.floor((l+h)/2);p=arr[m];t=getTime(xD,p);if t==math.huge then h=m-1 else r=yD-getY2(t,y0,p);if r>=-0.018 and r<=0.018 then return p,t end;if r>0 then l=m+1 else h=m-1 end end end;
+    return nil,nil 
+end
 
 -- 辅助函数：检查一个角度是否在允许范围内 (不在禁区内)
 local function isAngleAllowed(angle_rad, min_rad, max_rad)
@@ -155,16 +224,6 @@ local function isAngleAllowed(angle_rad, min_rad, max_rad)
         return wrapped_angle >= min_rad and wrapped_angle <= max_rad
     else -- 允许范围是环绕的，例如 [min, PI) U (-PI, max]
         return wrapped_angle >= min_rad or wrapped_angle <= max_rad
-    end
-end
-
--- 辅助函数：检查一个角度是否在红石禁区内
-local function isAngleInRedstoneForbiddenZone(angle_rad, min_forbidden_rad, max_forbidden_rad)
-    local wrapped_angle = wrapToPi(angle_rad)
-    if min_forbidden_rad < max_forbidden_rad then -- 禁区是 [min, max]
-        return wrapped_angle >= min_forbidden_rad and wrapped_angle <= max_forbidden_rad
-    else -- 禁区是环绕的，例如 [min, PI) U (-PI, max]
-        return wrapped_angle >= min_forbidden_rad or wrapped_angle <= max_forbidden_rad
     end
 end
 
@@ -186,31 +245,27 @@ end
 local function genStr(s,count) local result=""; for i=1,count do result=result..s end; return result end
 
 -- 网络通信 
--- controlCenter 结构体简化，不再包含 fire 和 mode
-local controlCenter={tgPos={x=0,y=0,z=0},velocity={x=0,y=0,z=0}} 
+local controlCenter={tgPos={x=0,y=0,z=0},velocity={x=0,y=0,z=0},mode=2,fire=false}
 local ct=20 -- 控制中心数据刷新计时器
 
--- 辅助函数：获取有效的控制中心ID（非负整数）
+-- 辅助函数：获取有效的控制中心ID（正整数）
 local function getValidControlCenterId()
     local id_str = properties.controlCenterId
     local id_num = tonumber(id_str)
-    -- 确保是数字，且是非负整数 (包含 0)
-    if id_num and id_num >= 0 and math.floor(id_num) == id_num then 
+    if id_num and id_num >= 0 and math.floor(id_num) == id_num then -- 确保是正整数
         return id_num
     end
     return nil -- 返回nil表示ID无效
 end
 
+local cross_point={x=0,y=0,z=0}
 -- 监听控制中心消息
 local function listener() 
     while true do 
         local targetId = getValidControlCenterId()
         local id,msg=rednet.receive(protocol,2);
-        -- 仅处理 tgPos 和 velocity，忽略 mode 和 fire
-        if targetId ~= nil and id == targetId then 
-            controlCenter.tgPos = msg.tgPos or {x=0,y=0,z=0}
-            controlCenter.velocity = msg.velocity or {x=0,y=0,z=0}
-            ct=20 
+        if targetId and id==targetId then -- 只有当自身ID有效且消息ID匹配时才处理
+            controlCenter=msg;ct=20 
         end 
     end 
 end
@@ -220,9 +275,8 @@ local function sendRequest()
     local slug=ship and ship.getName()or nil;
     while true do 
         local targetId = getValidControlCenterId()
-        if targetId ~= nil then -- 只有当ID有效时才发送请求
-            -- 移除 bullets_count 和 cross_point
-            rednet.send(targetId,{name=properties.cannonName,pw=properties.password,slug=slug},request_protocol);
+        if targetId then -- 只有当ID有效时才发送请求
+            rednet.send(targetId,{name=properties.cannonName,pw=properties.password,slug=slug,bullets_count=0,cross_point=cross_point},request_protocol);
         end
         sleep(0.05)
     end 
@@ -231,37 +285,68 @@ end
 -- 运行监听器和请求发送器
 local function runListener() parallel.waitForAll(sendRequest,listener) end
 
--- 偏航电机主控制逻辑 
-local yawMotorUtil={pos={x=0,y=0,z=0},velocity={x=0,y=0,z=0}}
-function yawMotorUtil:getAtt() local v=ship.getVelocity();self.pos=getCannonPos();self.velocity={x=v.x/20,y=v.y/20,z=v.z/20} end
--- getNextPos 不再需要，因为没有弹道预测
-
+-- 火炮主控制逻辑 
+local cannonUtil={pos={x=0,y=0,z=0},velocity={x=0,y=0,z=0}}
+function cannonUtil:getAtt() local v=ship.getVelocity();self.pos=getCannonPos();self.velocity={x=v.x/20,y=v.y/20,z=v.z/20} end
+function cannonUtil:getNextPos(t) return{x=self.pos.x+self.velocity.x*t,y=self.pos.y+self.velocity.y*t,z=self.pos.z+self.velocity.z*t}end
+local pitchList={};for i=-90,90,0.0375 do table.insert(pitchList,math.rad(i))end
 local quatList={west={w=-1,x=0,y=0,z=0},south={w=-0.7071067811865476,x=0,y=-0.7071067811865476,z=0},east={w=0,x=0,y=-1,z=0},north={w=-0.7071067811865476,x=0,y=0.7071067811865476,z=0}}
+local fire = false
 
--- 运行偏航电机控制主循环
+-- 运行火炮控制主循环
 local function runCt()
+    local AIM_TOLERANCE_COSINE = 0.998 
     -- [[ 性能 ]] 在循环外预创建表格以复用
-    local tgVec = {}
+    local tgVec, tmpVec = {}, {}
     while true do
-        local finalCommandYaw_rad
+        local finalCommandYaw_rad, finalCommandPitch_rad
         if ct > 0 then
             ct = ct - 1
-            yawMotorUtil:getAtt()
+            cannonUtil:getAtt()
             local currentYaw_rad = yawMotor.getCurrentValue(); 
+            local currentPitch_rad = pitchMotor.getCurrentValue()
             
-            local yawMotorPos = yawMotorUtil.pos; -- 直接使用当前位置，无弹道预测
-            local target=controlCenter.tgPos;
-            target.y = target.y + 0.5; -- 目标方块中心
+            local cannonPos=cannonUtil:getNextPos(_forecast);
+            local target=controlCenter.tgPos;target.y=target.y+0.5;
+            
+            -- 第一次预测目标位置
+            tgVec.x, tgVec.y, tgVec.z = target.x-cannonPos.x, target.y-cannonPos.y, target.z-cannonPos.z
+            local tmpT=(500-math.sqrt(tgVec.x^2+tgVec.y^2+tgVec.z^2))/500;tmpT=tmpT<0 and 0 or tmpT*8;
+            target.x=target.x+controlCenter.velocity.x*tmpT;target.y=target.y+controlCenter.velocity.y*tmpT;target.z=target.z+controlCenter.velocity.z*tmpT;
+            
+            -- 第二次计算目标向量和俯仰角
+            tgVec.x, tgVec.y, tgVec.z = target.x-cannonPos.x, target.y-cannonPos.y, target.z-cannonPos.z
+            local xDis=math.sqrt(tgVec.x^2+tgVec.z^2);
+            local tmpPitch,cTime=ag_binary_search(pitchList,xDis,0,tgVec.y);
+            
+            -- 如果有有效弹道时间，进行第三次预测
+            if cTime and cTime>5 then 
+                if controlCenter.mode>2 and tmpPitch then 
+                    target.x=target.x+controlCenter.velocity.x*cTime;target.y=target.y+controlCenter.velocity.y*cTime;target.z=target.z+controlCenter.velocity.z*cTime;
+                    tgVec.x, tgVec.y, tgVec.z = target.x-cannonPos.x, target.y-cannonPos.y, target.z-cannonPos.z;
+                    xDis=math.sqrt(tgVec.x^2+tgVec.z^2);
+                    tmpPitch,cTime=ag_binary_search(pitchList,xDis,0,tgVec.y)
+                end;
+                if tmpPitch then 
+                    local _c=math.sqrt(tgVec.x^2+tgVec.z^2);
+                    local allDis=math.sqrt(tgVec.x^2+tgVec.y^2+tgVec.z^2);
+                    local cosP=math.cos(tmpPitch);
+                    tmpVec={x=allDis*(tgVec.x/_c)*cosP,y=allDis*math.sin(tmpPitch),z=allDis*(tgVec.z/_c)*cosP}
+                else 
+                    tmpVec=tgVec 
+                end 
+            else 
+                tmpVec=tgVec 
+            end
 
-            -- 计算从偏航电机到目标点的向量
-            tgVec.x, tgVec.y, tgVec.z = target.x-yawMotorPos.x, target.y-yawMotorPos.y, target.z-yawMotorPos.z
-            
             -- 转换为舰船局部坐标系
-            local ship_local_vec=RotateVectorByQuat(negaQ(ship.getQuaternion()),tgVec)
+            local ship_local_vec=RotateVectorByQuat(negaQ(ship.getQuaternion()),tmpVec)
             local idealTargetYaw_rad=math.atan2(ship_local_vec.z,ship_local_vec.x)
+            local mag=math.sqrt(ship_local_vec.x^2+ship_local_vec.y^2+ship_local_vec.z^2)
+            local tgPitch_deg=mag>0.001 and math.deg(math.asin(ship_local_vec.y/mag))or 0
             
             -- 偏航锁定范围处理
-            local localVec=RotateVectorByQuat(quatMultiply(quatList[properties.lock_yaw_face],negaQ(ship.getQuaternion())),tgVec);
+            local localVec=RotateVectorByQuat(quatMultiply(quatList[properties.lock_yaw_face],negaQ(ship.getQuaternion())),tmpVec);
             local localYaw_rad=-math.atan2(localVec.z,-localVec.x);
             if math.abs(localYaw_rad)<_lock_yaw_range_rad then idealTargetYaw_rad=0 end
             
@@ -297,69 +382,80 @@ local function runCt()
                 finalCommandYaw_rad = ultimate_target_yaw_rad 
             end
             
+            -- 应用俯仰校准偏移量
+            local pitch_offset_rad=_pitchDirectionOffset_rad;
+            local ideal_pitch_rad=wrapToPi(math.rad(tgPitch_deg)+pitch_offset_rad);
+            local minPitch_rad=_minPitchAngle_rad;
+            local maxPitch_rad=_maxPitchAngle_rad;
+            local clamped_pitch_rad=ideal_pitch_rad
+            if clamped_pitch_rad<minPitch_rad then clamped_pitch_rad=minPitch_rad elseif clamped_pitch_rad>maxPitch_rad then clamped_pitch_rad=maxPitch_rad end
+            finalCommandPitch_rad=clamped_pitch_rad
+            
+            fire=controlCenter.fire
+            -- local calculated_pitch_rad=math.rad(tgPitch_deg)
+            -- if calculated_pitch_rad<minPitch_rad or calculated_pitch_rad>maxPitch_rad then fire=false end -- 移除弹道俯仰禁区检查
+            
+            -- 开火条件：仅保留偏航对齐检查
+            if fire then 
+                local current_yaw_vector={x=math.cos(currentYaw_rad),z=math.sin(currentYaw_rad)};
+                local final_target_vector_for_check={x=math.cos(finalCommandYaw_rad),z=math.sin(finalCommandYaw_rad)};
+                local yaw_dot_product=current_yaw_vector.x*final_target_vector_for_check.x+current_yaw_vector.z*final_target_vector_for_check.z;
+                if yaw_dot_product<AIM_TOLERANCE_COSINE then fire=false end 
+                
+                -- 移除俯仰对齐检查
+                -- local current_pitch_vector_y = math.sin(currentPitch_rad)
+                -- local current_pitch_vector_xz = math.cos(currentPitch_rad)
+                -- local final_target_pitch_vector_y = math.sin(finalCommandPitch_rad)
+                -- local final_target_pitch_vector_xz = math.cos(finalCommandPitch_rad)
+                -- local pitch_dot_product = current_pitch_vector_y * final_target_pitch_vector_y + current_pitch_vector_xz * final_target_pitch_vector_xz
+                -- if pitch_dot_product < AIM_TOLERANCE_COSINE then fire=false end
+            end
+
+            if tmpVec then 
+                local tgDis=math.sqrt(tmpVec.x^2+tmpVec.y^2+tmpVec.z^2);
+                if tgDis and tgDis>0 then 
+                    local tgPoint={x=-tgDis,y=0,z=0};
+                    local p_angle=currentPitch_rad/2;
+                    local pitchQuat={w=math.cos(p_angle),x=0,y=0,z=math.sin(p_angle)};
+                    local y_angle=-currentYaw_rad/2;
+                    local yawQuat={w=math.cos(y_angle),x=0,y=math.sin(y_angle),z=0};
+                    local final_turret_rotation=quatMultiply(yawQuat,pitchQuat);
+                    cross_point=RotateVectorByQuat(final_turret_rotation,tgPoint);
+                    cross_point=RotateVectorByQuat(ship.getQuaternion(),cross_point);
+                    local selfpos=cannonUtil:getNextPos(1);
+                    cross_point.x=cross_point.x+selfpos.x;cross_point.y=cross_point.y+selfpos.y;cross_point.z=cross_point.z+selfpos.z 
+                else 
+                    cross_point=nil 
+                end 
+            else 
+                cross_point=nil 
+            end
             sleep(0.05) -- 高频更新
         else
             -- [[ 性能 ]] 闲置时，仅执行重置逻辑并大幅增加休眠时间
             finalCommandYaw_rad = _yawResetAngle_rad
+            finalCommandPitch_rad = _pitchResetAngle_rad
+            cross_point=nil
+            fire=false
             sleep(0.5) -- 低频更新
         end
 
         if properties.invertYawMotor then finalCommandYaw_rad = -finalCommandYaw_rad end
+        if properties.invertPitchMotor then finalCommandPitch_rad = -finalCommandPitch_rad end
         yawMotor.setTargetValue(finalCommandYaw_rad)
+        pitchMotor.setTargetValue(finalCommandPitch_rad)
     end
 end
 
--- 新增：红石输入/输出控制函数
-local function runRedstoneControl()
-    local all_sides = {"top", "bottom", "left", "right", "front"} -- 排除 "back"
-    local lastOutputTime = 0 -- 记录上次输出脉冲开始的时间，用于冷却
-    local isOutputOn = false -- 标记输出是否正在进行中 (0.2秒脉冲)
-    local pulseStartTime = 0 -- 记录当前脉冲开始的时间
-
+-- 检查开火条件并执行开火
+local function checkFire()
+    local lastFireTime=0
     while true do
-        local output_side = properties.redstoneOutputSide
-        local signal_detected = false
-        local currentYaw_rad = yawMotor.getCurrentValue() -- 获取当前偏航角度
-
-        -- 检查所有输入面
-        for _, side in ipairs(all_sides) do
-            if side ~= output_side then -- 这是一个输入面
-                if redstone.getInput(side) then
-                    signal_detected = true
-                    break -- 只要检测到一个信号就够了
-                end
-            end
+        local cooldown=_fireCooldown;local currentTime=os.clock()
+        if fire and ct>0 and(currentTime-lastFireTime>=cooldown)then
+            redstone.setOutput(properties.fire_side,true);lastFireTime=currentTime;sleep(0.2);redstone.setOutput(properties.fire_side,false)
         end
-        
-        local currentTime = os.clock()
-
-        -- 检查是否在红石禁区内
-        local inRedstoneForbiddenZone = isAngleInRedstoneForbiddenZone(currentYaw_rad, _minRedstoneYawAngle_rad, _maxRedstoneYawAngle_rad)
-
-        -- 如果在禁区内，强制关闭输出并阻止新脉冲
-        if inRedstoneForbiddenZone then
-            if redstone.getOutput(output_side) then -- 如果当前是开着的，就关掉
-                redstone.setOutput(output_side, false)
-            end
-            isOutputOn = false -- 确保不在输出状态
-            -- 禁区内不触发冷却，因为没有实际输出
-        else
-            -- 处理脉冲结束
-            if isOutputOn and (currentTime - pulseStartTime >= 0.2) then
-                redstone.setOutput(output_side, false)
-                isOutputOn = false
-            end
-
-            -- 处理脉冲开始 (如果检测到信号，不在输出中，且冷却时间已过)
-            if signal_detected and not isOutputOn and (currentTime - lastOutputTime >= _redstoneCooldown) then
-                redstone.setOutput(output_side, true)
-                isOutputOn = true
-                pulseStartTime = currentTime
-                lastOutputTime = currentTime -- 冷却时间从脉冲开始时计算
-            end
-        end
-        
-        sleep(0.05) -- 防止忙循环，允许其他并行任务运行
+        sleep(0.05)
     end
 end
 
@@ -487,41 +583,48 @@ local selfId=os.getComputerID()
 -- 运行终端UI界面
 local function runTerm()
     local fieldTb={
-        -- 红石输出冷却时间
-        redstoneCooldown = newTextField(properties, "redstoneCooldown", 17, 3), 
-        -- 红石禁区角度
-        minRedstoneYawAngle = newTextField(properties, "minRedstoneYawAngle", 17, 5), -- 新增
-        maxRedstoneYawAngle = newTextField(properties, "maxRedstoneYawAngle", 17, 6), -- 新增
+        fireCooldown=newTextField(properties, "fireCooldown", 17, 3), 
+        cannonOffset_x=newTextField(properties.cannonOffset,"x",19,4),
+        cannonOffset_y=newTextField(properties.cannonOffset,"y",25,4),
+        cannonOffset_z=newTextField(properties.cannonOffset,"z",31,4), 
+        barrelLength=newTextField(properties,"barrelLength",17,5), -- 调整x坐标
+        forecast=newTextField(properties,"forecast",40,5), -- 调整x坐标
         
-        -- 仅保留 Cannon Offset 的 x 和 z 用于校准偏航电机位置
-        cannonOffset_x=newTextField(properties.cannonOffset,"x",25,7), -- 调整y坐标
-        cannonOffset_z=newTextField(properties.cannonOffset,"z",31,7), -- 调整y坐标
+        -- Pitch 调节选项 (左侧)
+        minPitchAngle=newTextField(properties,"minPitchAngle",17,8), 
+        maxPitchAngle=newTextField(properties,"maxPitchAngle",17,9),  
+        pitchDirectionOffset=newTextField(properties, "pitchDirectionOffset", 17, 10), 
+        pitchResetAngle=newTextField(properties, "pitchResetAngle", 17, 11), 
+        pitch_torque = newTextField(properties, "pitch_torque", 15, 13), 
+
+        -- Yaw 调节选项 (右侧)
+        minYawAngle=newTextField(properties,"minYawAngle",40,8), 
+        maxYawAngle=newTextField(properties,"maxYawAngle",40,9), 
+        yawDirectionOffset=newTextField(properties, "yawDirectionOffset", 40, 10), 
+        yawResetAngle=newTextField(properties,"yawResetAngle",40,11), 
+        yaw_torque = newTextField(properties, "yaw_torque", 38, 13), 
         
-        -- Yaw 调节选项
-        minYawAngle=newTextField(properties,"minYawAngle",17,9), -- 调整y坐标
-        maxYawAngle=newTextField(properties,"maxYawAngle",17,10), -- 调整y坐标
-        yawDirectionOffset=newTextField(properties, "yawDirectionOffset", 17, 11), -- 调整y坐标
-        yawResetAngle=newTextField(properties,"yawResetAngle",17,12), -- 调整y坐标
-        yaw_torque = newTextField(properties, "yaw_torque", 17, 14), -- 调整y坐标
-        
-        cannonName=newTextField(properties,"cannonName",14,16), -- 调整y坐标
-        controlCenterId=newTextField(properties,"controlCenterId",12,17), -- 调整y坐标
-        password=newTextField(properties,"password",37,17) -- 调整y坐标
+        cannonName=newTextField(properties,"cannonName",14,15), 
+        controlCenterId=newTextField(properties,"controlCenterId",12,16), 
+        password=newTextField(properties,"password",37,16) 
     }
     local selectBoxTb={
-        redstoneOutputSide = newSelectBox(properties, "redstoneOutputSide", 2, 17, 2, "top", "bottom", "left", "right", "front"), 
-        -- Yaw 调节选项
-        invertYawMotor=newSelectBox(properties,"invertYawMotor",1,17,13,false,true) -- 调整y坐标
+        fire_side = newSelectBox(properties, "fire_side", 2, 11, 2, "top", "bottom", "left", "right", "front"), 
+        shellType = newSelectBox(properties, "shellType", 2, 14, 6, "standard", "heavier"), 
+        
+        -- Pitch 调节选项 (左侧)
+        invertPitchMotor=newSelectBox(properties,"invertPitchMotor",1,17,12,false,true), 
+        
+        -- Yaw 调节选项 (右侧)
+        invertYawMotor=newSelectBox(properties,"invertYawMotor",1,40,12,false,true) 
     }
     
     -- 调整文本框长度
-    fieldTb.redstoneCooldown.len = 5; 
-    fieldTb.minRedstoneYawAngle.len = 5; -- 新增
-    fieldTb.maxRedstoneYawAngle.len = 5; -- 新增
-    fieldTb.cannonOffset_x.len=3;fieldTb.cannonOffset_z.len=3;
-    fieldTb.minYawAngle.len=5;fieldTb.maxYawAngle.len=5;
-    fieldTb.yawResetAngle.len=5;fieldTb.yawDirectionOffset.len = 5;
-    fieldTb.yaw_torque.len=5;
+    fieldTb.barrelLength.len=3;fieldTb.forecast.len=5;fieldTb.cannonOffset_x.len=3;fieldTb.cannonOffset_y.len=3;fieldTb.cannonOffset_z.len=3;
+    fieldTb.minPitchAngle.len=5;fieldTb.maxPitchAngle.len=5;fieldTb.minYawAngle.len=5;fieldTb.maxYawAngle.len=5;
+    fieldTb.yawResetAngle.len=5;fieldTb.pitchResetAngle.len=5;fieldTb.fireCooldown.len = 5;
+    fieldTb.pitchDirectionOffset.len = 5;fieldTb.yawDirectionOffset.len = 5;
+    fieldTb.yaw_torque.len=5;fieldTb.pitch_torque.len=5;
     fieldTb.controlCenterId.len=5;fieldTb.password.len=14;
 
     local alarm_flag=false;term.clear();term.setCursorPos(15,8);term.write("Press any key to continue")
@@ -537,27 +640,35 @@ local function runTerm()
                 term.setCursorPos(18,1);print(string.format("Self ID: %d",selfId))
                 
                 -- UI布局调整后的标签位置
-                term.setCursorPos(2,2);term.write("Redstone Output:"); 
-                term.setCursorPos(2,3);term.write("Redstone Cooldown:"); 
-                term.setCursorPos(2,5);term.write("RS Min Yaw Ang:"); -- 新增标签
-                term.setCursorPos(2,6);term.write("RS Max Yaw Ang:"); -- 新增标签
-                term.setCursorPos(2,7);term.write("Yaw Position Offset: x=    z="); 
+                term.setCursorPos(2,2);term.write("Fire Side");
+                term.setCursorPos(2,3);term.write("Fire Cooldown:");
+                term.setCursorPos(2,4);term.write("Cannon Offset: x=    y=    z=");
+                term.setCursorPos(2,5);term.write("Cannon Long:");term.setCursorPos(28,5);term.write("Power:"); -- 调整标签和位置
+                term.setCursorPos(2,6);term.write("Shell Type:"); 
                 
-                -- Yaw 调节选项
-                term.setCursorPos(2,9);term.write("Min Yaw Ang:"); 
-                term.setCursorPos(2,10);term.write("Max Yaw Ang:"); 
-                term.setCursorPos(2,11);term.write("Yaw Offset:"); 
-                term.setCursorPos(2,12);term.write("Yaw Reset:"); 
-                term.setCursorPos(2,13);term.write("Invert Yaw: "); 
-                term.setCursorPos(2,14);term.write("Yaw Torque:"); 
+                -- Pitch 调节选项 (左侧)
+                term.setCursorPos(2,8);term.write("Min Pitch Ang:"); 
+                term.setCursorPos(2,9);term.write("Max Pitch Ang:"); 
+                term.setCursorPos(2,10);term.write("Pitch Offset:"); 
+                term.setCursorPos(2,11);term.write("Pitch Reset:"); 
+                term.setCursorPos(2,12);term.write("Invert Pitch:"); 
+                term.setCursorPos(2,13);term.write("Pitch Torque:"); 
 
-                term.setCursorPos(2,16);term.write("Cannon Name:"); 
-                term.setCursorPos(2,17);term.write("Center ID:");term.setCursorPos(28,17);term.write("Password:"); 
+                -- Yaw 调节选项 (右侧)
+                term.setCursorPos(28,8);term.write("Min Yaw Ang:"); 
+                term.setCursorPos(28,9);term.write("Max Yaw Ang:"); 
+                term.setCursorPos(28,10);term.write("Yaw Offset:"); 
+                term.setCursorPos(28,11);term.write("Yaw Reset:"); 
+                term.setCursorPos(28,12);term.write("Invert Yaw: "); 
+                term.setCursorPos(28,13);term.write("Yaw Torque:"); 
+
+                term.setCursorPos(2,15);term.write("Cannon Name:"); 
+                term.setCursorPos(2,16);term.write("Center ID:");term.setCursorPos(28,16);term.write("Password:"); 
 
                 for k,v in pairs(fieldTb) do v:paint() end; 
                 for k,v in pairs(selectBoxTb) do v:paint() end
                 
-                term.setCursorPos(2, 19); -- 状态行位置调整
+                term.setCursorPos(2, 18); -- 状态行位置调整
                 term.setTextColor(colors.lime); -- 仅状态信息使用绿色
                 term.write("Status: OK. All systems running.")
                 term.setTextColor(colors.white); -- 状态信息后重置为白色
@@ -585,6 +696,6 @@ local function runTerm()
 end
 
 -- 程序入口
-local function runCannonControl() parallel.waitForAll(runCt) end 
-local function run() parallel.waitForAll(runCannonControl,runTerm,runRedstoneControl) end -- 将 runRedstoneControl 添加到并行任务中
+local function runCannonControl() parallel.waitForAll(runCt,checkFire) end
+local function run() parallel.waitForAll(runCannonControl,runTerm) end
 parallel.waitForAll(run,runListener)
