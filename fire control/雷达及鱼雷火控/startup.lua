@@ -1,11 +1,6 @@
 --[[======================================================================
     自动火控 (仅偏航电机控制)
-    v2.3.4 
-======================================================================
-    改动日志:
-    - [优化] 调整了主控制循环 (runCt) 在活动状态下的频率，从每 0.05 秒执行一次瞄准计算调整为每 0.1 秒。
-    - [优化] 调整了红石控制循环 (runRedstoneControl) 的频率，从每 0.05 秒检查一次红石输入调整为每 0.1 秒。
-    - [配置] 偏航电机的默认PID参数调整为 P=300.0, I=0.0, D=40.0。
+    v2.4.3
 ======================================================================]]
 
 -- 尝试打开 modem
@@ -36,18 +31,29 @@ function system.reset()
         lock_yaw_range = 0, 
         lock_yaw_face = "east", 
         yaw_torque = 50.0, 
-        pid_p = 300.0, -- **已修改：P参数调整为 300.0**
-        pid_i = 0.0,   -- **已修改：I参数调整为 0.0**
-        pid_d = 40.0,  -- **已修改：D参数调整为 40.0**
+        pid_p = 300.0, -- 默认值 P
+        pid_i = 0.0,   -- 默认值 I
+        pid_d = 40.0,  -- 默认值 D
         invertYawMotor = false, 
         yawDirectionOffset = 0 -- 偏航校准偏移量，不影响复位角度
     } 
 end
 
 -- 将对象写入文件进行持久化
+-- **修改：在写入时，过滤掉PID参数**
 function system.write(file, obj) 
     local f = io.open(file, "w"); 
-    if f then f:write(textutils.serialise(obj)); f:close() end 
+    if f then 
+        local obj_to_save = {}
+        for k, v in pairs(obj) do
+            -- 排除PID参数
+            if k ~= "pid_p" and k ~= "pid_i" and k ~= "pid_d" then
+                obj_to_save[k] = v
+            end
+        end
+        f:write(textutils.serialise(obj_to_save)); 
+        f:close() 
+    end 
 end
 
 -- 更新持久化数据
@@ -56,14 +62,18 @@ function system.updatePersistentData()
 end
 
 -- 初始化系统：加载或设置默认属性
+-- **修改：在加载时，跳过PID参数**
 function system.init() 
     local f = io.open(system.fileName, "r"); 
     if f then 
         local d = textutils.unserialise(f:read("a")); 
         f:close(); 
-        properties = system.reset(); -- 首先加载默认值
-        for k, v in pairs(properties) do -- 然后，用保存的值覆盖（如果存在）
-            if d and d[k] ~= nil then properties[k] = d[k] end 
+        properties = system.reset(); -- 首先加载默认值 (包含新的PID默认值)
+        for k, v in pairs(properties) do 
+            -- **修改：仅当键不是PID参数时才从文件中覆盖**
+            if k ~= "pid_p" and k ~= "pid_i" and k ~= "pid_d" then
+                if d and d[k] ~= nil then properties[k] = d[k] end 
+            end
         end 
     else 
         properties = system.reset(); -- 如果没有文件，使用默认值
@@ -154,6 +164,7 @@ end
 refreshConfigValues() -- 首次加载时刷新一次
 
 -- 辅助函数：检查一个角度是否在允许范围内 (不在禁区内)
+-- 注意：这里的 min_rad 和 max_rad 定义的是“允许”的范围
 local function isAngleAllowed(angle_rad, min_rad, max_rad)
     local wrapped_angle = wrapToPi(angle_rad)
     if min_rad < max_rad then -- 允许范围是 [min, max]
@@ -163,7 +174,42 @@ local function isAngleAllowed(angle_rad, min_rad, max_rad)
     end
 end
 
--- 辅助函数：检查一个角度是否在红石禁区内
+-- 辅助函数：计算最短角距离
+local function angularDistance(a1, a2)
+    local d = wrapToPi(a2 - a1)
+    return math.abs(d)
+end
+
+-- 辅助函数：获取离一个角度最近的允许边界
+local function getClosestAllowedBoundary(angle, min_allowed, max_allowed)
+    local wrapped_angle = wrapToPi(angle)
+    if isAngleAllowed(wrapped_angle, min_allowed, max_allowed) then
+        return wrapped_angle -- 已经允许，返回自身
+    end
+
+    -- 角度在禁区内，找到最近的允许边界
+    local dist_to_min = angularDistance(wrapped_angle, min_allowed);
+    local dist_to_max = angularDistance(wrapped_angle, max_allowed);
+
+    if dist_to_min < dist_to_max then
+        return min_allowed;
+    else
+        return max_allowed;
+    end
+end
+
+-- 检查路径是否穿过禁区 (这里指的是电机操作的允许范围之外的区域)
+-- 如果最短路径的中间点有任何一个在“不允许”的区域，则认为路径穿过禁区
+local function doesPathCrossForbiddenZone(c,t,min_allowed,max_allowed) 
+    local d=wrapToPi(t-c);
+    -- 检查路径中间点是否在不允许的区域
+    -- 检查点数量可以调整，更多点更精确，但性能开销更大
+    return not isAngleAllowed(c+d*0.25, min_allowed, max_allowed) or 
+           not isAngleAllowed(c+d*0.5, min_allowed, max_allowed) or 
+           not isAngleAllowed(c+d*0.75, min_allowed, max_allowed)
+end
+
+-- 辅助函数：检查一个角度是否在红石禁区内 (与电机允许范围是两回事)
 local function isAngleInRedstoneForbiddenZone(angle_rad, min_forbidden_rad, max_forbidden_rad)
     local wrapped_angle = wrapToPi(angle_rad)
     if min_forbidden_rad < max_forbidden_rad then -- 禁区是 [min, max]
@@ -171,21 +217,6 @@ local function isAngleInRedstoneForbiddenZone(angle_rad, min_forbidden_rad, max_
     else -- 禁区是环绕的，例如 [min, PI) U (-PI, max]
         return wrapped_angle >= min_forbidden_rad or wrapped_angle <= max_forbidden_rad
     end
-end
-
--- 辅助函数：计算最短角距离
-local function angularDistance(a1, a2)
-    local d = wrapToPi(a2 - a1)
-    return math.abs(d)
-end
-
--- 检查路径是否穿过禁区 (使用isAngleAllowed辅助函数)
-local function doesPathCrossForbiddenZone(c,t,min,max) 
-    local d=wrapToPi(t-c);
-    -- 检查路径中间点是否在禁区内
-    return not isAngleAllowed(c+d*0.25, min, max) or 
-           not isAngleAllowed(c+d*0.5, min, max) or 
-           not isAngleAllowed(c+d*0.75, min, max)
 end
 
 local function genStr(s,count) local result=""; for i=1,count do result=result..s end; return result end
@@ -248,13 +279,13 @@ local function runCt()
     -- [[ 性能 ]] 在循环外预创建表格以复用
     local tgVec = {}
     while true do
-        local finalCommandYaw_rad
+        local finalCommandYaw_rad -- 最终发送给电机作为目标的值
         if ct > 0 then
             ct = ct - 1
             yawMotorUtil:getAtt()
             local currentYaw_rad = yawMotor.getCurrentValue(); 
             
-            local yawMotorPos = yawMotorUtil.pos; -- 直接使用当前位置，无弹道预测
+            local yawMotorPos = yawMotorUtil.pos; 
             local target=controlCenter.tgPos;
             target.y = target.y + 0.5; -- 目标方块中心
 
@@ -270,39 +301,53 @@ local function runCt()
             local localYaw_rad=-math.atan2(localVec.z,-localVec.x);
             if math.abs(localYaw_rad)<_lock_yaw_range_rad then idealTargetYaw_rad=0 end
             
-            -- 应用偏航校准偏移量
-            local raw_ideal_yaw_rad=wrapToPi(idealTargetYaw_rad+_yawDirectionOffset_rad)
-            local minYaw_rad=_minYawAngle_rad;
-            local maxYaw_rad=_maxYawAngle_rad;
-            local ultimate_target_yaw_rad;
+            -- 应用偏航校准偏移量，得到原始期望角度
+            local raw_desired_yaw_rad = wrapToPi(idealTargetYaw_rad + _yawDirectionOffset_rad);
             
-            -- 步骤1：将原始目标偏航角钳制到允许范围内
-            local wrapped_raw_ideal_yaw_rad = wrapToPi(raw_ideal_yaw_rad)
-            if not isAngleAllowed(wrapped_raw_ideal_yaw_rad, minYaw_rad, maxYaw_rad) then
-                -- 目标在禁区内，钳制到最近的边界
-                local dist_to_min_boundary = angularDistance(wrapped_raw_ideal_yaw_rad, minYaw_rad)
-                local dist_to_max_boundary = angularDistance(wrapped_raw_ideal_yaw_rad, maxYaw_rad)
-                if dist_to_min_boundary < dist_to_max_boundary then
-                    ultimate_target_yaw_rad = minYaw_rad
-                else
-                    ultimate_target_yaw_rad = maxYaw_rad
+            local min_allowed_rad = _minYawAngle_rad; -- 电机允许范围的最小角度
+            local max_allowed_rad = _maxYawAngle_rad; -- 电机允许范围的最大角度
+            
+            local current_wrapped = wrapToPi(currentYaw_rad);
+
+            -- **改进的禁区绕行逻辑**
+            local ultimate_target_rad; -- 最终希望到达的目标角度 (可能被钳制到允许边界)
+
+            -- Step 1: 钳制原始目标角度，确保它在允许范围内
+            if not isAngleAllowed(raw_desired_yaw_rad, min_allowed_rad, max_allowed_rad) then
+                ultimate_target_rad = getClosestAllowedBoundary(raw_desired_yaw_rad, min_allowed_rad, max_allowed_rad);
+            else
+                ultimate_target_rad = raw_desired_yaw_rad;
+            end
+
+            -- Step 2: 处理火控当前位置在禁区内的情况 (优先级最高：尽快离开禁区)
+            if not isAngleAllowed(current_wrapped, min_allowed_rad, max_allowed_rad) then
+                finalCommandYaw_rad = getClosestAllowedBoundary(current_wrapped, min_allowed_rad, max_allowed_rad);
+                
+                -- 如果火控正好卡在边界上，给一个微小的推动以确保它开始移动
+                local delta_to_boundary = wrapToPi(finalCommandYaw_rad - current_wrapped);
+                if math.abs(delta_to_boundary) < math.rad(0.1) then -- 如果非常接近目标边界
+                    -- 推动它离开边界，方向与目标方向一致
+                    finalCommandYaw_rad = wrapToPi(finalCommandYaw_rad + math.rad(1.0) * (delta_to_boundary >= 0 and 1 or -1));
                 end
             else
-                ultimate_target_yaw_rad = wrapped_raw_ideal_yaw_rad
+                -- 火控当前位置在允许区域内
+                -- Step 3: 检查从当前位置到最终目标的**最短路径**是否穿过禁区
+                if doesPathCrossForbiddenZone(current_wrapped, ultimate_target_rad, min_allowed_rad, max_allowed_rad) then
+                    -- 最短路径被禁区阻挡，需要增量引导绕行
+                    local delta_to_ultimate = wrapToPi(ultimate_target_rad - current_wrapped);
+                    -- 确定绕行方向：与最短路径方向相反
+                    local safe_direction_sign = (delta_to_ultimate >= 0) and -1 or 1; -- 如果最短路径是顺时针，则逆时针绕行；反之亦然
+                    local proxy_step_rad = math.rad(30.0); -- **已修改：每次移动的增量步长，用于引导，现在是30度**
+                    finalCommandYaw_rad = wrapToPi(current_wrapped + safe_direction_sign * proxy_step_rad);
+                else
+                    -- 最短路径清晰，直接瞄准最终目标
+                    finalCommandYaw_rad = ultimate_target_rad;
+                end
             end
+            -- **禁区绕行逻辑结束**
             
-            -- [[ 绕行逻辑 ]] 始终激活，如果路径穿过禁区则使用 'incremental' 方法
-            if doesPathCrossForbiddenZone(currentYaw_rad, ultimate_target_yaw_rad, minYaw_rad, maxYaw_rad) then 
-                -- 增量绕行方案
-                local delta_rad = wrapToPi(ultimate_target_yaw_rad - currentYaw_rad);
-                local safe_direction_sign = delta_rad >= 0 and -1 or 1; -- 如果目标在顺时针方向，则逆时针避让，反之亦然
-                local proxy_step_rad = math.rad(15.0); -- 固定步长
-                finalCommandYaw_rad = wrapToPi(currentYaw_rad + safe_direction_sign * proxy_step_rad)
-            else 
-                finalCommandYaw_rad = ultimate_target_yaw_rad 
-            end
-            
-            sleep(0.1) -- **已修改：活动状态下每 0.1 秒更新一次**
+            finalCommandYaw_rad = wrapToPi(finalCommandYaw_rad); -- 确保最终指令角度在 [-PI, PI] 范围内
+            sleep(0.1) -- 活动状态下每 0.1 秒更新一次
         else
             -- [[ 性能 ]] 闲置时，仅执行重置逻辑并大幅增加休眠时间
             finalCommandYaw_rad = _yawResetAngle_rad
@@ -495,34 +540,34 @@ local function runTerm()
         -- 红石输出冷却时间
         redstoneCooldown = newTextField(properties, "redstoneCooldown", 17, 3), 
         -- 红石禁区角度
-        minRedstoneYawAngle = newTextField(properties, "minRedstoneYawAngle", 17, 5), -- 新增
-        maxRedstoneYawAngle = newTextField(properties, "maxRedstoneYawAngle", 17, 6), -- 新增
+        minRedstoneYawAngle = newTextField(properties, "minRedstoneYawAngle", 17, 5), 
+        maxRedstoneYawAngle = newTextField(properties, "maxRedstoneYawAngle", 17, 6), 
         
         -- 仅保留 Cannon Offset 的 x 和 z 用于校准偏航电机位置
-        cannonOffset_x=newTextField(properties.cannonOffset,"x",25,7), -- 调整y坐标
-        cannonOffset_z=newTextField(properties.cannonOffset,"z",31,7), -- 调整y坐标
+        cannonOffset_x=newTextField(properties.cannonOffset,"x",25,7), 
+        cannonOffset_z=newTextField(properties.cannonOffset,"z",31,7), 
         
         -- Yaw 调节选项
-        minYawAngle=newTextField(properties,"minYawAngle",17,9), -- 调整y坐标
-        maxYawAngle=newTextField(properties,"maxYawAngle",17,10), -- 调整y坐标
-        yawDirectionOffset=newTextField(properties, "yawDirectionOffset", 17, 11), -- 调整y坐标
-        yawResetAngle=newTextField(properties,"yawResetAngle",17,12), -- 调整y坐标
-        yaw_torque = newTextField(properties, "yaw_torque", 17, 14), -- 调整y坐标
+        minYawAngle=newTextField(properties,"minYawAngle",17,9), 
+        maxYawAngle=newTextField(properties,"maxYawAngle",17,10), 
+        yawDirectionOffset=newTextField(properties, "yawDirectionOffset", 17, 11), 
+        yawResetAngle=newTextField(properties,"yawResetAngle",17,12), 
+        yaw_torque = newTextField(properties, "yaw_torque", 17, 14), 
         
-        cannonName=newTextField(properties,"cannonName",14,16), -- 调整y坐标
-        controlCenterId=newTextField(properties,"controlCenterId",12,17), -- 调整y坐标
-        password=newTextField(properties,"password",37,17) -- 调整y坐标
+        cannonName=newTextField(properties,"cannonName",14,16), 
+        controlCenterId=newTextField(properties,"controlCenterId",12,17), 
+        password=newTextField(properties,"password",37,17) 
     }
     local selectBoxTb={
         redstoneOutputSide = newSelectBox(properties, "redstoneOutputSide", 2, 17, 2, "top", "bottom", "left", "right", "front"), 
         -- Yaw 调节选项
-        invertYawMotor=newSelectBox(properties,"invertYawMotor",1,17,13,false,true) -- 调整y坐标
+        invertYawMotor=newSelectBox(properties,"invertYawMotor",1,17,13,false,true) 
     }
     
     -- 调整文本框长度
     fieldTb.redstoneCooldown.len = 5; 
-    fieldTb.minRedstoneYawAngle.len = 5; -- 新增
-    fieldTb.maxRedstoneYawAngle.len = 5; -- 新增
+    fieldTb.minRedstoneYawAngle.len = 5; 
+    fieldTb.maxRedstoneYawAngle.len = 5; 
     fieldTb.cannonOffset_x.len=3;fieldTb.cannonOffset_z.len=3;
     fieldTb.minYawAngle.len=5;fieldTb.maxYawAngle.len=5;
     fieldTb.yawResetAngle.len=5;fieldTb.yawDirectionOffset.len = 5;
@@ -544,8 +589,8 @@ local function runTerm()
                 -- UI布局调整后的标签位置
                 term.setCursorPos(2,2);term.write("Redstone Output:"); 
                 term.setCursorPos(2,3);term.write("Redstone Cooldown:"); 
-                term.setCursorPos(2,5);term.write("RS Min Yaw Ang:"); -- 新增标签
-                term.setCursorPos(2,6);term.write("RS Max Yaw Ang:"); -- 新增标签
+                term.setCursorPos(2,5);term.write("RS Min Yaw Ang:"); 
+                term.setCursorPos(2,6);term.write("RS Max Yaw Ang:"); 
                 term.setCursorPos(2,7);term.write("Yaw Position Offset: x=    z="); 
                 
                 -- Yaw 调节选项
@@ -555,6 +600,8 @@ local function runTerm()
                 term.setCursorPos(2,12);term.write("Yaw Reset:"); 
                 term.setCursorPos(2,13);term.write("Invert Yaw: "); 
                 term.setCursorPos(2,14);term.write("Yaw Torque:"); 
+                -- **移除PID的UI标签，改为显示当前值**
+                term.setCursorPos(2,15);term.write(string.format("PID: P=%.1f I=%.1f D=%.1f", properties.pid_p, properties.pid_i, properties.pid_d)); -- 显示当前PID值，但不允许修改
 
                 term.setCursorPos(2,16);term.write("Cannon Name:"); 
                 term.setCursorPos(2,17);term.write("Center ID:");term.setCursorPos(28,17);term.write("Password:"); 
