@@ -1,6 +1,6 @@
 --[[======================================================================
     副炮火控
-    v1.0.0
+    v1.0.1
 ======================================================================
 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠈⠀⠀⠈⠁⠀⠙⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠁⠀⠀⠀⠀⠀⠀ ⠀⠀⠀⠈⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
@@ -33,46 +33,50 @@
 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣆⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+[优化]:加入了角度校准
 ======================================================================]]
--- 尝试打开调制解调器
+
+-- 尝试打开调制解调器，这是进行红石网络通信的前提
 peripheral.find("modem", rednet.open)
 
--- 全局常量
-local REQUEST_PROTOCOL = "CBCcenter"  -- 用于注册请求的协议
-local DATA_PROTOCOL = "CBCNumber"     -- 用于接收数字的协议
-local RESET_PROTOCOL = "CBCReset"     -- 新增：用于接收重置信号的协议
-local CENTER_PASSWORD = "123456"      -- 中心密码，需与中心匹配
-local PI = math.pi
-local TWO_PI = 2 * PI -- 新增：用于 wrapToPi 优化
+-- 全局常量定义
+local REQUEST_PROTOCOL = "CBCcenter"  -- 用于注册请求的协议名称
+local DATA_PROTOCOL = "CBCNumber"     -- 用于接收数字数据的协议名称
+local RESET_PROTOCOL = "CBCReset"     -- 用于接收重置信号的协议名称
+local CENTER_PASSWORD = "123456"      -- 与火控中心匹配的密码
+local PI = math.pi                    -- 圆周率π
+local TWO_PI = 2 * PI                 -- 2π，用于角度规范化
+local _BYPASS_STEP_RAD = math.rad(30) -- 固定绕行步长，转换为弧度 (30度)
+local ANGLE_TOLERANCE = math.rad(1.0) -- 角度容差，用于判断是否“在边缘”或“停靠” (1度)
+local ANGLE_OFFSET_FOR_SAFE_EDGE = math.rad(0.5) -- 离开禁区边缘的微小偏移量，确保停在禁区外 (0.5度)
 
--- Chinese Comment: 数据持久化 (仅保留 controlCenterId 和 receiverName)
+-- 数据持久化系统
 local properties, system = {}, { fileName = "receiver_dat", file = nil } 
 
--- Chinese Comment: 重置系统属性为默认值
+-- 重置系统属性为默认值
 function system.reset() 
     return { 
-        controlCenterId = "", -- 默认空字符串
-        receiverName = "MyReceiver", -- 默认名称 (保留在properties中，但不在UI显示)
-        -- 以下值在 properties 中以字符串（度）形式存储，方便UI编辑
-        initialAngle = "0.0", 
-        forbiddenMinAngle = "-10.0", 
-        forbiddenMaxAngle = "10.0",  
-        -- bypassStep 已移除UI输入，固定为30度
+        controlCenterId = "",   -- 火控中心电脑ID，默认空字符串
+        receiverName = "MyReceiver", -- 本接收器的名称，用于注册，不在UI显示
+        initialAngle = "0.0",   -- 初始角度 (度，UI输入)
+        forbiddenMinAngle = "-10.0", -- 禁区最小角度 (度，UI输入)
+        forbiddenMaxAngle = "10.0",  -- 禁区最大角度 (度，UI输入)
+        calibrationOffset = "0.0", -- 校准角度 (度，UI输入)
     } 
 end
 
--- Chinese Comment: 将对象写入文件进行持久化
+-- 将对象写入文件进行持久化
 function system.write(file, obj) 
     local f = io.open(file, "w"); 
     if f then f:write(textutils.serialise(obj)); f:close() end 
 end
 
--- Chinese Comment: 更新持久化数据
+-- 更新持久化数据到文件
 function system.updatePersistentData() 
     system.write(system.fileName, properties) 
 end
 
--- Chinese Comment: 初始化系统：加载或设置默认属性
+-- 初始化系统：加载或设置默认属性
 function system.init() 
     local f = io.open(system.fileName, "r"); 
     local loaded_data = nil
@@ -84,13 +88,13 @@ function system.init()
     properties = system.reset(); -- 总是从默认值开始
     local defaults = system.reset() -- 获取默认值用于验证
     
-    -- 用加载的数据覆盖，但要验证数值型字符串
+    -- 用加载的数据覆盖默认值，并验证数值型字符串
     if loaded_data then
         for k, v in pairs(properties) do
             if loaded_data[k] ~= nil then
                 if k == "controlCenterId" or k == "receiverName" then
                     properties[k] = tostring(loaded_data[k])
-                elseif k == "initialAngle" or k == "forbiddenMinAngle" or k == "forbiddenMaxAngle" then
+                elseif k == "initialAngle" or k == "forbiddenMinAngle" or k == "forbiddenMaxAngle" or k == "calibrationOffset" then
                     -- 验证数值型字符串：如果加载的值不是有效数字字符串，则使用默认字符串
                     if tonumber(loaded_data[k]) ~= nil then
                         properties[k] = tostring(loaded_data[k])
@@ -109,12 +113,13 @@ function system.init()
     properties.initialAngle = tostring(tonumber(properties.initialAngle) or tonumber(defaults.initialAngle))
     properties.forbiddenMinAngle = tostring(tonumber(properties.forbiddenMinAngle) or tonumber(defaults.forbiddenMinAngle))
     properties.forbiddenMaxAngle = tostring(tonumber(properties.forbiddenMaxAngle) or tonumber(defaults.forbiddenMaxAngle))
+    properties.calibrationOffset = tostring(tonumber(properties.calibrationOffset) or tonumber(defaults.calibrationOffset))
 
     system.updatePersistentData() -- 确保在初始化后写入一个有效的文件
 end
-system.init() -- Chinese Comment: 首次运行或加载时初始化属性
+system.init() -- 首次运行或加载时初始化属性
 
--- Chinese Comment: 辅助函数：生成重复字符串
+-- 辅助函数：生成重复字符串
 local function genStr(s, count)
     local result = ""
     for i = 1, count, 1 do
@@ -123,7 +128,7 @@ local function genStr(s, count)
     return result
 end
 
--- Chinese Comment: 辅助函数：获取有效的控制中心ID（正整数）
+-- 辅助函数：获取有效的控制中心ID（正整数）
 local function getValidControlCenterId()
     local id_str = properties.controlCenterId
     local id_num = tonumber(id_str)
@@ -142,12 +147,7 @@ local termUtil = {
 }
 
 local absTextField = {
-    x = 1,
-    y = 1,
-    len = 15,
-    text = "",
-    textCorlor = "0",
-    backgroundColor = "8"
+    x = 1, y = 1, len = 15, text = "", textCorlor = "0", backgroundColor = "8"
 }
 
 -- 绘制文本框
@@ -246,47 +246,41 @@ end
 
 local newTextField = function(key, value, x, y)
     return setmetatable({
-        key = key,
-        value = value,
-        type = type(key[value]), -- 这里的type是初始加载时的，可能不准确
-        x = x,
-        y = y
+        key = key, value = value, type = type(key[value]), x = x, y = y
     }, {
         __index = absTextField
     })
 end
 
+-- 全局状态变量
 local selfId = os.getComputerID()
-local lastReceivedValue = nil     -- 用于存储最后接收到的实际数字 (number, nil if not received)
-local lastReceivedNumberDisplay = "N/A" -- 用于显示最后接收到的数字的字符串形式 (string)
-local motorTargetAngle = 0.0     -- 电机目标角度 (所有电机共享，内部使用弧度)
+local lastReceivedValue = nil     -- 最后接收到的原始数字 (弧度)
+local lastReceivedNumberDisplay = "N/A" -- 用于UI显示最后接收到的数字 (度)
+local motorTargetAngle = 0.0     -- 电机当前的目标角度 (弧度，内部使用)
 
--- Chinese Comment: 硬编码PID值，与火控代码保持一致，提高响应速度
+-- 电机PID和扭矩设置
 local DEFAULT_MOTOR_PID_P = 300.0
 local DEFAULT_MOTOR_PID_I = 0.0
 local DEFAULT_MOTOR_PID_D = 40.0
-local DEFAULT_MOTOR_TORQUE = 50.0 -- Chinese Comment: 参考火控代码的默认扭矩
+local DEFAULT_MOTOR_TORQUE = 50.0
 
-local connectedMotors = {}       -- Chinese Comment: 存储所有连接的电机外设对象
+local connectedMotors = {}       -- 存储所有连接的电机外设对象
 local pid_set_once = false       -- 标记PID是否已设置过
 local is_registered = false      -- 标志：是否已成功注册到中心
-local reset_pending = false      -- 新增：重置信号待处理标志
+local reset_pending = false      -- 标志：是否收到重置信号待处理
 
--- Chinese Comment: 内部使用的角度值（弧度），从 UI 的度数转换而来
+-- 内部使用的角度值（弧度），从 UI 的度数转换而来
 local _initialAngle_rad = 0.0
 local _forbiddenMinAngle_rad = 0.0
 local _forbiddenMaxAngle_rad = 0.0
-local _BYPASS_STEP_RAD = math.rad(30) -- 固定绕行步长为30度，转换为弧度
-local ANGLE_TOLERANCE = math.rad(1.0) -- 角度容差，用于判断是否“在边缘”或“停靠”
-local ANGLE_OFFSET_FOR_SAFE_EDGE = math.rad(0.5) -- 离开禁区边缘的微小偏移量
+local _calibrationOffset_rad = 0.0 -- 校准角度的弧度值
 
--- Chinese Comment: 辅助函数：将角度规范化到 [-PI, PI] 范围
+-- 辅助函数：将角度规范化到 [-PI, PI] 范围
 local function wrapToPi(angle)
     return (angle + PI) % TWO_PI - PI
 end
 
--- Chinese Comment: 辅助函数：检查一个角度是否在禁区内
--- min_forbidden_rad 和 max_forbidden_rad 定义禁区范围
+-- 辅助函数：检查一个角度是否在禁区内
 local function isAngleInForbiddenZone(angle_rad, min_forbidden_rad, max_forbidden_rad)
     local wrapped_angle = wrapToPi(angle_rad)
     local wrapped_min = wrapToPi(min_forbidden_rad)
@@ -299,13 +293,13 @@ local function isAngleInForbiddenZone(angle_rad, min_forbidden_rad, max_forbidde
     end
 end
 
--- Chinese Comment: 辅助函数：计算两个角度之间的最短距离
+-- 辅助函数：计算两个角度之间的最短距离
 local function angularDistance(angle1, angle2)
     local diff = wrapToPi(angle2 - angle1)
     return math.abs(diff)
 end
 
--- Chinese Comment: 检查路径是否穿过禁区 (优化：严格定义为起点终点均在禁区外，但中间有禁区)
+-- 辅助函数：检查路径是否穿过禁区 (起点和终点均在禁区外，但中间有禁区)
 local function doesPathCrossForbiddenZone(current_rad, target_rad, forbidden_min_rad, forbidden_max_rad)
     -- 如果起点或终点在禁区内，则不认为“路径穿过”，而是由其他优先级更高的逻辑处理
     if isAngleInForbiddenZone(current_rad, forbidden_min_rad, forbidden_max_rad) or
@@ -325,18 +319,18 @@ local function doesPathCrossForbiddenZone(current_rad, target_rad, forbidden_min
     return false
 end
 
--- Chinese Comment: 刷新所有数值型 properties，将其从字符串（UI输入）转换为内部弧度值
+-- 刷新所有数值型 properties，将其从字符串（UI输入）转换为内部弧度值
 local function refreshNumericProperties()
     local defaults = system.reset() -- 获取默认值以备回退
 
-    -- 从 properties (字符串，度) 转换为内部弧度变量
     _initialAngle_rad = math.rad(tonumber(properties.initialAngle) or tonumber(defaults.initialAngle))
     _forbiddenMinAngle_rad = math.rad(tonumber(properties.forbiddenMinAngle) or tonumber(defaults.forbiddenMinAngle))
     _forbiddenMaxAngle_rad = math.rad(tonumber(properties.forbiddenMaxAngle) or tonumber(defaults.forbiddenMaxAngle))
+    _calibrationOffset_rad = math.rad(tonumber(properties.calibrationOffset) or tonumber(defaults.calibrationOffset))
 end
 refreshNumericProperties() -- 首次加载时刷新一次
 
--- Chinese Comment: 查找并初始化所有电机
+-- 查找并初始化所有电机
 local function initializeAllMotors()
     local peripheralNames = peripheral.getNames()
     if peripheralNames then
@@ -352,7 +346,6 @@ local function initializeAllMotors()
     end
 
     if #connectedMotors == 0 then
-        -- Chinese Comment: 如果没有找到电机，则显示错误信息并退出。
         term.clear()
         term.setCursorPos(1,1)
         term.setTextColor(colors.red)
@@ -361,45 +354,42 @@ local function initializeAllMotors()
         return false
     end
 
-    -- Chinese Comment: 遍历所有连接的电机，进行初始化和PID设置。
+    -- 遍历所有连接的电机，进行初始化和PID设置。
     for _, motor in ipairs(connectedMotors) do
-        -- 确保电机处于角度调整模式
-        pcall(function() motor.setIsAdjustingAngle(true) end)
+        pcall(function() motor.setIsAdjustingAngle(true) end) -- 确保电机处于角度调整模式
         
-        -- PID和扭矩只在首次连接时设置一次
-        if not pid_set_once then
+        if not pid_set_once then -- PID和扭矩只在首次连接时设置一次
             pcall(function() motor.setPID(DEFAULT_MOTOR_PID_P, DEFAULT_MOTOR_PID_I, DEFAULT_MOTOR_PID_D) end)
             pcall(function() motor.setOutputTorque(DEFAULT_MOTOR_TORQUE) end)
         end
-        -- 设置初始目标角度 (使用内部弧度值)
-        pcall(function() motor.setTargetValue(_initialAngle_rad) end) 
+        -- 设置初始目标角度 (弧度) 并应用校准
+        pcall(function() motor.setTargetValue(wrapToPi(_initialAngle_rad + _calibrationOffset_rad)) end) 
     end
     pid_set_once = true -- 标记PID已设置
-    motorTargetAngle = _initialAngle_rad -- 更新全局目标角度为初始角度 (弧度)
+    motorTargetAngle = _initialAngle_rad -- 更新全局目标角度为初始角度 (弧度) (这里motorTargetAngle是程序1给的原始目标，校准是最后一步)
     return true
 end
 
-
--- 初始化UI元素
+-- UI初始化
 function termUtil:init()
     termUtil.fieldTb = {
-        controlCenterId = newTextField(properties, "controlCenterId", 12, 2), -- Center ID输入框的精确坐标
-        initialAngle = newTextField(properties, "initialAngle", 17, 3), -- 初始角度
-        forbiddenMinAngle = newTextField(properties, "forbiddenMinAngle", 17, 4), -- 禁区最小角度
-        forbiddenMaxAngle = newTextField(properties, "forbiddenMaxAngle", 17, 5), -- 禁区最大角度
-        -- bypassStep 已移除
+        controlCenterId = newTextField(properties, "controlCenterId", 12, 2), -- Center ID输入框的精确坐标 (Y=2)
+        initialAngle = newTextField(properties, "initialAngle", 17, 3),    -- 初始角度 (Y=3)
+        forbiddenMinAngle = newTextField(properties, "forbiddenMinAngle", 17, 4), -- 禁区最小角度 (Y=4)
+        forbiddenMaxAngle = newTextField(properties, "forbiddenMaxAngle", 17, 5), -- 禁区最大角度 (Y=5)
+        calibrationOffset = newTextField(properties, "calibrationOffset", 21, 6), -- 校准角度 (Y=6)
     }
     termUtil.fieldTb.controlCenterId.len = 5 
-    termUtil.fieldTb.initialAngle.len = 6 -- 初始角度输入框长度
+    termUtil.fieldTb.initialAngle.len = 6
     termUtil.fieldTb.forbiddenMinAngle.len = 6
     termUtil.fieldTb.forbiddenMaxAngle.len = 6
+    termUtil.fieldTb.calibrationOffset.len = 6
 
-    -- 默认将光标设置到Center ID输入框
-    termUtil.cpX = termUtil.fieldTb.controlCenterId.x 
+    termUtil.cpX = termUtil.fieldTb.controlCenterId.x -- 默认将光标设置到Center ID输入框
     termUtil.cpY = termUtil.fieldTb.controlCenterId.y
 end
 
--- Chinese Comment: 刷新UI显示
+-- 刷新UI显示
 function termUtil:refresh()
     term.clear()
     term.setTextColor(colors.white)
@@ -425,18 +415,21 @@ function termUtil:refresh()
     term.write("Forbidden Max:") 
     termUtil.fieldTb.forbiddenMaxAngle:paint()
     
-    term.setCursorPos(1, 7) 
+    term.setCursorPos(1, 6)
+    term.write("Calibration Angle:") 
+    termUtil.fieldTb.calibrationOffset:paint()
+
+    term.setCursorPos(1, 8)
     term.write(string.format("Last Received Number: %s", lastReceivedNumberDisplay)) 
     
-    term.setCursorPos(1, 8) 
-    -- motorTargetAngle 是弧度，显示时转换为度数
+    term.setCursorPos(1, 9)
     term.write(string.format("Motor Target Angle: %.2f deg", math.deg(motorTargetAngle)))
 
-    -- 新增和调整位置的元素
+    -- 底部信息
     term.setCursorPos(1, 18) -- 第18行
     term.write(string.format("Connected Motors: %d", #connectedMotors)) 
 
-    term.setCursorPos(1, 19) -- 第19行
+    term.setCursorPos(1, 19) -- 第19行，颜色强调
     if is_registered then
         term.setTextColor(colors.green)
         term.write("Registered: Yes")
@@ -444,11 +437,12 @@ function termUtil:refresh()
         term.setTextColor(colors.red)
         term.write("Registered: No (Sending requests...)")
     end
-    term.setTextColor(colors.white) -- 重置颜色
+    term.setTextColor(colors.white) -- 重置颜色，避免影响后续输出
 
-    -- 确保光标在正确位置
-    term.setCursorPos(termUtil.cpX, termUtil.cpY) 
+    term.setCursorPos(termUtil.cpX, termUtil.cpY) -- 确保光标在正确位置
 end
+
+-- 核心逻辑函数
 
 -- 周期性地向中心发送注册请求，直到成功
 local function sendRegistration()
@@ -459,9 +453,8 @@ local function sendRegistration()
         end
         sleep(1) -- 每1秒发送一次注册请求
     end
-    -- 注册成功后，此任务可以停止或进入休眠
     while true do
-        sleep(60) -- 避免忙循环
+        sleep(60) -- 注册成功后，此任务进入休眠，避免忙循环
     end
 end
 
@@ -474,13 +467,13 @@ local function receiveData()
 
         if targetId and id == targetId then
             if protocol_received == DATA_PROTOCOL and type(msg) == "table" and msg.value ~= nil and msg.step ~= nil then 
-                lastReceivedValue = msg.value -- 这是弧度值
-                motorTargetAngle = msg.value   -- 内部使用弧度
+                lastReceivedValue = msg.value -- 接收到的原始弧度值
+                motorTargetAngle = msg.value   -- 更新内部目标角度
                 lastReceivedNumberDisplay = string.format("%.2f deg", math.deg(lastReceivedValue)) -- 显示时转换为度数
                 is_registered = true -- 收到数据即表示注册成功
                 reset_pending = false -- 收到新数据，取消重置待处理状态
             elseif protocol_received == RESET_PROTOCOL then
-                -- 收到重置信号，将目标角度设置为初始角度 (弧度)，并设置重置待处理标志
+                -- 收到重置信号，将目标角度设置为初始角度，并设置重置待处理标志
                 motorTargetAngle = _initialAngle_rad
                 lastReceivedNumberDisplay = string.format("RESET: %.2f deg", math.deg(_initialAngle_rad)) -- 显示时转换为度数
                 reset_pending = true
@@ -489,38 +482,41 @@ local function receiveData()
     end
 end
 
--- 独立的电机目标更新任务 (现在会遍历所有连接的电机，并处理禁区绕行)
+-- 独立的电机目标更新任务 (处理禁区绕行逻辑)
 local function updateMotorTarget()
     local MOTOR_UPDATE_FREQUENCY = 0.05 
 
     while true do
-        -- 获取当前电机角度 (弧度)
-        local success, angle_value = pcall(function() return connectedMotors[1].getAngle() end)
-        local current_motor_angle_rad = success and angle_value or 0.0 
+        -- 获取当前电机物理角度 (弧度)
+        local success, physical_current_angle_rad = pcall(function() return connectedMotors[1].getAngle() end)
+        physical_current_angle_rad = success and physical_current_angle_rad or 0.0 
 
-        local final_angle_to_set_rad = current_motor_angle_rad -- 默认保持当前角度，直到计算出新目标
+        -- **关键修改：将物理角度转换为逻辑角度，用于所有禁区和路径判断**
+        local logical_current_angle_rad = wrapToPi(physical_current_angle_rad - _calibrationOffset_rad)
+
+        local final_logical_angle_to_set_rad = logical_current_angle_rad -- 默认保持当前逻辑角度，直到计算出新目标
 
         -- 优先级1: 重置模式
         if reset_pending then
-            -- 如果当前电机角度已经非常接近初始角度，则保持不动，否则移动到初始角度
-            if angularDistance(current_motor_angle_rad, _initialAngle_rad) < ANGLE_TOLERANCE then
-                final_angle_to_set_rad = current_motor_angle_rad
+            -- 如果当前逻辑角度已经非常接近初始逻辑角度，则保持不动，否则移动到初始逻辑角度
+            if angularDistance(logical_current_angle_rad, _initialAngle_rad) < ANGLE_TOLERANCE then
+                final_logical_angle_to_set_rad = logical_current_angle_rad
             else
-                final_angle_to_set_rad = _initialAngle_rad
+                final_logical_angle_to_set_rad = _initialAngle_rad
             end
         else
-            -- 从接收到的数据中获取原始目标角度 (弧度)
+            -- 从接收到的数据中获取原始目标逻辑角度 (弧度)
             local target_from_center_rad = motorTargetAngle 
             
-            local current_in_forbidden_zone = isAngleInForbiddenZone(current_motor_angle_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad)
+            local current_in_forbidden_zone = isAngleInForbiddenZone(logical_current_angle_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad)
             local target_from_center_in_forbidden_zone = isAngleInForbiddenZone(target_from_center_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad)
 
             -- 优先级2: 如果当前电机已在禁区内，必须尝试逃离
             if current_in_forbidden_zone then
                 local target_for_escape_rad
-                -- 找出最近的“安全区边缘”作为逃离目标
-                local dist_to_min_boundary = angularDistance(current_motor_angle_rad, _forbiddenMinAngle_rad)
-                local dist_to_max_boundary = angularDistance(current_motor_angle_rad, _forbiddenMaxAngle_rad)
+                -- 找出最近的“安全区边缘”作为逃离目标 (逻辑角度)
+                local dist_to_min_boundary = angularDistance(logical_current_angle_rad, _forbiddenMinAngle_rad)
+                local dist_to_max_boundary = angularDistance(logical_current_angle_rad, _forbiddenMaxAngle_rad)
                 
                 if dist_to_min_boundary < dist_to_max_boundary then
                     target_for_escape_rad = wrapToPi(_forbiddenMinAngle_rad - ANGLE_OFFSET_FOR_SAFE_EDGE)
@@ -528,28 +524,25 @@ local function updateMotorTarget()
                     target_for_escape_rad = wrapToPi(_forbiddenMaxAngle_rad + ANGLE_OFFSET_FOR_SAFE_EDGE)
                 end
 
-                -- 如果直接移动到逃离目标会穿过禁区（例如绕过禁区中心），则启动绕行
-                -- 注意：这里的doesPathCrossForbiddenZone会返回false如果起点在禁区内，所以需要特殊处理
-                local delta_to_escape = wrapToPi(target_for_escape_rad - current_motor_angle_rad)
+                -- 尝试绕行到逃离目标
+                local delta_to_escape = wrapToPi(target_for_escape_rad - logical_current_angle_rad)
                 local bypass_direction = (delta_to_escape >= 0) and -1 or 1 -- 如果目标在顺时针方向，则逆时针避让，反之亦然
-                local attempted_bypass_angle = wrapToPi(current_motor_angle_rad + (bypass_direction * _BYPASS_STEP_RAD))
+                local attempted_bypass_angle = wrapToPi(logical_current_angle_rad + (bypass_direction * _BYPASS_STEP_RAD))
 
-                -- 如果绕行尝试的目标仍然在禁区内，或者绕行路径会再次穿过禁区（从当前点到绕行点），
-                -- 则尝试另一个方向，否则直接移动到绕行点
+                -- 如果绕行尝试的目标仍然在禁区内，则尝试反方向绕行
                 if isAngleInForbiddenZone(attempted_bypass_angle, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                    -- 尝试反方向
-                    final_angle_to_set_rad = wrapToPi(current_motor_angle_rad - (bypass_direction * _BYPASS_STEP_RAD))
+                    final_logical_angle_to_set_rad = wrapToPi(logical_current_angle_rad - (bypass_direction * _BYPASS_STEP_RAD))
                     -- 如果反方向仍然在禁区内，则直接冲向安全边缘
-                    if isAngleInForbiddenZone(final_angle_to_set_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                        final_angle_to_set_rad = target_for_escape_rad
+                    if isAngleInForbiddenZone(final_logical_angle_to_set_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
+                        final_logical_angle_to_set_rad = target_for_escape_rad
                     end
                 else
-                    final_angle_to_set_rad = attempted_bypass_angle
+                    final_logical_angle_to_set_rad = attempted_bypass_angle
                 end
                 
             -- 优先级3: 当前电机不在禁区内，但程序1发送的目标角度在禁区内
             elseif target_from_center_in_forbidden_zone then
-                -- 将目标钳制到最近的禁区边缘（安全侧）
+                -- 将目标钳制到最近的禁区边缘（安全侧） (逻辑角度)
                 local clamped_safe_edge_rad
                 local dist_to_min_boundary = angularDistance(target_from_center_rad, _forbiddenMinAngle_rad)
                 local dist_to_max_boundary = angularDistance(target_from_center_rad, _forbiddenMaxAngle_rad)
@@ -560,56 +553,59 @@ local function updateMotorTarget()
                     clamped_safe_edge_rad = wrapToPi(_forbiddenMaxAngle_rad + ANGLE_OFFSET_FOR_SAFE_EDGE)
                 end
 
-                -- 如果当前电机角度已经非常接近这个安全边缘，则保持当前角度（停止移动）
-                if angularDistance(current_motor_angle_rad, clamped_safe_edge_rad) < ANGLE_TOLERANCE then
-                    final_angle_to_set_rad = current_motor_angle_rad
+                -- 如果当前逻辑角度已经非常接近这个安全边缘，则保持当前逻辑角度（停止移动）
+                if angularDistance(logical_current_angle_rad, clamped_safe_edge_rad) < ANGLE_TOLERANCE then
+                    final_logical_angle_to_set_rad = logical_current_angle_rad
                 else
-                    -- 否则，检查从当前位置到最近安全禁区边缘的路径是否穿过禁区（即需要绕行）
-                    if doesPathCrossForbiddenZone(current_motor_angle_rad, clamped_safe_edge_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                        local delta_to_clamped_edge = wrapToPi(clamped_safe_edge_rad - current_motor_angle_rad)
+                    -- 否则，检查从当前逻辑位置到最近安全禁区边缘的路径是否穿过禁区（即需要绕行）
+                    if doesPathCrossForbiddenZone(logical_current_angle_rad, clamped_safe_edge_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
+                        local delta_to_clamped_edge = wrapToPi(clamped_safe_edge_rad - logical_current_angle_rad)
                         local bypass_direction = (delta_to_clamped_edge >= 0) and -1 or 1 -- 尝试与目标方向相反的方向绕行
 
-                        local attempted_bypass_angle = wrapToPi(current_motor_angle_rad + (bypass_direction * _BYPASS_STEP_RAD))
+                        local attempted_bypass_angle = wrapToPi(logical_current_angle_rad + (bypass_direction * _BYPASS_STEP_RAD))
                         
-                        -- 如果这个方向仍然会进入禁区，尝试另一个方向
+                        -- 如果绕行尝试的目标仍然在禁区内，则尝试另一个方向
                         if isAngleInForbiddenZone(attempted_bypass_angle, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                            final_angle_to_set_rad = wrapToPi(current_motor_angle_rad - (bypass_direction * _BYPASS_STEP_RAD))
+                            final_logical_angle_to_set_rad = wrapToPi(logical_current_angle_rad - (bypass_direction * _BYPASS_STEP_RAD))
                         else
-                            final_angle_to_set_rad = attempted_bypass_angle
+                            final_logical_angle_to_set_rad = attempted_bypass_angle
                         end
                     else
                         -- 路径安全，直接移动到最近的安全禁区边缘
-                        final_angle_to_set_rad = clamped_safe_edge_rad
+                        final_logical_angle_to_set_rad = clamped_safe_edge_rad
                     end
                 end
-            -- 优先级4: 当前电机和程序1的目标角度都在禁区外，但从当前位置到目标的路径穿过禁区
-            elseif doesPathCrossForbiddenZone(current_motor_angle_rad, target_from_center_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                local delta_to_target = wrapToPi(target_from_center_rad - current_motor_angle_rad)
+            -- 优先级4: 当前电机和程序1的目标角度都在禁区外，但从当前逻辑位置到目标的路径穿过禁区
+            elseif doesPathCrossForbiddenZone(logical_current_angle_rad, target_from_center_rad, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
+                local delta_to_target = wrapToPi(target_from_center_rad - logical_current_angle_rad)
                 local bypass_direction_for_path = (delta_to_target >= 0) and -1 or 1 -- 尝试与目标方向相反的方向绕行
 
-                local attempted_bypass_angle = wrapToPi(current_motor_angle_rad + (bypass_direction_for_path * _BYPASS_STEP_RAD))
+                local attempted_bypass_angle = wrapToPi(logical_current_angle_rad + (bypass_direction_for_path * _BYPASS_STEP_RAD))
                 
-                -- 如果这个方向仍然会进入禁区，尝试另一个方向
+                -- 如果绕行尝试的目标仍然在禁区内，则尝试另一个方向
                 if isAngleInForbiddenZone(attempted_bypass_angle, _forbiddenMinAngle_rad, _forbiddenMaxAngle_rad) then
-                    final_angle_to_set_rad = wrapToPi(current_motor_angle_rad - (bypass_direction_for_path * _BYPASS_STEP_RAD))
+                    final_logical_angle_to_set_rad = wrapToPi(logical_current_angle_rad - (bypass_direction_for_path * _BYPASS_STEP_RAD))
                 else
-                    final_angle_to_set_rad = attempted_bypass_angle
+                    final_logical_angle_to_set_rad = attempted_bypass_angle
                 end
-            -- 优先级5: 一切正常，直接前往程序1发送的目标角度
+            -- 优先级5: 一切正常，直接前往程序1发送的目标逻辑角度
             else
-                final_angle_to_set_rad = target_from_center_rad
+                final_logical_angle_to_set_rad = target_from_center_rad
             end
         end
 
+        -- **最终步骤：在设置给电机前，将计算出的逻辑角度加上校准偏移，转换为物理角度**
+        local calibrated_angle_to_set_rad = wrapToPi(final_logical_angle_to_set_rad + _calibrationOffset_rad)
+
         -- 将最终计算出的角度设置给所有电机 (弧度)
         for _, motor in ipairs(connectedMotors) do 
-            pcall(function() motor.setTargetValue(final_angle_to_set_rad) end)
+            pcall(function() motor.setTargetValue(calibrated_angle_to_set_rad) end)
         end
         sleep(MOTOR_UPDATE_FREQUENCY)
     end
 end
 
--- 电机连接和UI刷新逻辑 (主要负责UI刷新)
+-- UI刷新任务
 local function controlMotorAndUI() 
     local UI_REFRESH_INTERVAL = 0.5 
     
@@ -634,7 +630,6 @@ local function runTerm()
                 if y == termUtil.fieldTb.controlCenterId.y and x >= termUtil.fieldTb.controlCenterId.x and x <= termUtil.fieldTb.controlCenterId.x + termUtil.fieldTb.controlCenterId.len then
                     termUtil.fieldTb.controlCenterId:click(x, y)
                 end
-                -- 其他新增字段的点击处理
                 if y == termUtil.fieldTb.initialAngle.y and x >= termUtil.fieldTb.initialAngle.x and x <= termUtil.fieldTb.initialAngle.x + termUtil.fieldTb.initialAngle.len then
                     termUtil.fieldTb.initialAngle:click(x, y)
                 end
@@ -644,13 +639,14 @@ local function runTerm()
                 if y == termUtil.fieldTb.forbiddenMaxAngle.y and x >= termUtil.fieldTb.forbiddenMaxAngle.x and x <= termUtil.fieldTb.forbiddenMaxAngle.x + termUtil.fieldTb.forbiddenMaxAngle.len then
                     termUtil.fieldTb.forbiddenMaxAngle:click(x, y)
                 end
+                if y == termUtil.fieldTb.calibrationOffset.y and x >= termUtil.fieldTb.calibrationOffset.x and x <= termUtil.fieldTb.calibrationOffset.x + termUtil.fieldTb.calibrationOffset.len then
+                    termUtil.fieldTb.calibrationOffset:click(x, y)
+                end
             elseif event == "key" then
                 local key = eventData[2]
-                -- 检查光标是否在Center ID输入框内
                 if termUtil.cpY == termUtil.fieldTb.controlCenterId.y and termUtil.cpX >= termUtil.fieldTb.controlCenterId.x and termUtil.cpX <= termUtil.fieldTb.controlCenterId.x + termUtil.fieldTb.controlCenterId.len + 1 then
                     termUtil.fieldTb.controlCenterId:inputKey(key)
                 end
-                -- 其他新增字段的键盘处理
                 if termUtil.cpY == termUtil.fieldTb.initialAngle.y and termUtil.cpX >= termUtil.fieldTb.initialAngle.x and termUtil.cpX <= termUtil.fieldTb.initialAngle.x + termUtil.fieldTb.initialAngle.len + 1 then
                     termUtil.fieldTb.initialAngle:inputKey(key)
                 end
@@ -660,13 +656,14 @@ local function runTerm()
                 if termUtil.cpY == termUtil.fieldTb.forbiddenMaxAngle.y and termUtil.cpX >= termUtil.fieldTb.forbiddenMaxAngle.x and termUtil.cpX <= termUtil.fieldTb.forbiddenMaxAngle.x + termUtil.fieldTb.forbiddenMaxAngle.len + 1 then
                     termUtil.fieldTb.forbiddenMaxAngle:inputKey(key)
                 end
+                if termUtil.cpY == termUtil.fieldTb.calibrationOffset.y and termUtil.cpX >= termUtil.fieldTb.calibrationOffset.x and termUtil.cpX <= termUtil.fieldTb.calibrationOffset.x + termUtil.fieldTb.calibrationOffset.len + 1 then
+                    termUtil.fieldTb.calibrationOffset:inputKey(key)
+                end
             elseif event == "char" then
                 local char = eventData[2]
-                -- 检查光标是否在Center ID输入框内
                 if termUtil.cpY == termUtil.fieldTb.controlCenterId.y and termUtil.cpX >= termUtil.fieldTb.controlCenterId.x and termUtil.cpX <= termUtil.fieldTb.controlCenterId.x + termUtil.fieldTb.controlCenterId.len + 1 then
                     termUtil.fieldTb.controlCenterId:inputChar(char)
                 end
-                -- 其他新增字段的字符处理
                 if termUtil.cpY == termUtil.fieldTb.initialAngle.y and termUtil.cpX >= termUtil.fieldTb.initialAngle.x and termUtil.cpX <= termUtil.fieldTb.initialAngle.x + termUtil.fieldTb.initialAngle.len + 1 then
                     termUtil.fieldTb.initialAngle:inputChar(char)
                 end
@@ -676,9 +673,12 @@ local function runTerm()
                 if termUtil.cpY == termUtil.fieldTb.forbiddenMaxAngle.y and termUtil.cpX >= termUtil.fieldTb.forbiddenMaxAngle.x and termUtil.cpX <= termUtil.fieldTb.forbiddenMaxAngle.x + termUtil.fieldTb.forbiddenMaxAngle.len + 1 then
                     termUtil.fieldTb.forbiddenMaxAngle:inputChar(char)
                 end
+                if termUtil.cpY == termUtil.fieldTb.calibrationOffset.y and termUtil.cpX >= termUtil.fieldTb.calibrationOffset.x and termUtil.cpX <= termUtil.fieldTb.calibrationOffset.x + termUtil.fieldTb.calibrationOffset.len + 1 then
+                    termUtil.fieldTb.calibrationOffset:inputChar(char)
+                end
             end
             system.updatePersistentData() 
-            refreshNumericProperties() -- FIX: UI编辑后刷新数值型属性
+            refreshNumericProperties() -- UI编辑后刷新数值型属性
             termUtil:refresh() 
         end
     end
@@ -688,11 +688,10 @@ end
 local function main()
     term.clear()
     term.setCursorPos(1, 1)
-    term.write("Starting Receiver Number Listener...")
+    term.write("Starting 副炮火控...")
     sleep(1)
 
-    -- 在启动时立即查找并初始化所有电机
-    if not initializeAllMotors() then
+    if not initializeAllMotors() then -- 在启动时立即查找并初始化所有电机
         return -- 如果没有找到电机，程序退出
     end
     
