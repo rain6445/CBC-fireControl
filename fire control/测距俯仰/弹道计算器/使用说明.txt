@@ -1,0 +1,20 @@
+部署代码（直接输入电脑，能不能部署成功看服务器网络而不是我）
+wget https://raw.githubusercontent.com/rain6445/CBC-fireControl/refs/heads/main/fire%20control/%E6%B5%8B%E8%B7%9D%E4%BF%AF%E4%BB%B0/%E5%BC%B9%E9%81%93%E8%AE%A1%E7%AE%97%E5%99%A8/startup.lua
+
+部署进计算机后
+上面四项分别为
+装药（速度请除以40后输入）                                        重力系数
+炮管长度（实际长度，有缩放请乘以缩放倍数）          阻力系数（1-实际阻力）
+
+设置好上面4项后
+请将UnlimitedPeripheralWorks的Peripheral proxy贴在电脑任意面上，
+并通过Ultimate configurator连接需要观察的火炮底座（最先点击的显示在上面）
+
+列表出现火炮后
+点击名字（蓝色）可修改火炮显示名字
+点击数字可以修改火炮离海高度
+
+UI显示：
+火炮名字   当前火炮俯仰角度    计算出的火炮射击位置   火炮最大射击距离（达到最大射击距离所需要的角度）
+
+需要定制请在群里or服务器里联系rainmark
