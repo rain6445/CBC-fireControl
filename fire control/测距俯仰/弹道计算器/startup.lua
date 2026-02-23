@@ -1,345 +1,476 @@
--- ==========================================
--- 1. 配置与外设初始化 (Hardware Setup)
--- ==========================================
-local ANGLE_TO_SPEED = 26.6666666666666666667
-local MAX_SPEED = 256
-local INVERT_PITCH = false -- 如果方向反了改成 true
+--[[弹道计算器
+======================================================================
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠈⠀⠀⠈⠁⠀⠙⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠁⠀⠀⠀⠀⠀⠀ ⠀⠀⠀⠈⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⡔⠀⠀⠀⠀⠀⠀⠀ ⠀⠀⠀⠀⠈⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠁⠀⠀⠀⠀⠀⠀⠀⠀⢀⣧⠀⠀ ⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⢰⠀⠀⠀⠀⠀⠠⣶⣿⣿⡄⠀ ⠀⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠀⠚⠛⠛⠁⠀⠀⢷⣶⣿⣿⣇⠀⠀⠈⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢹⣿⣿⠀⠀⠀⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠁⠀⠀⡠⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⡆⠀⠀⠀⠻⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⠟⠛⠛⠛⠉⠉⠁⠀⠀⠀⢀⣠⡾⠀⠀⠀⠀⠀⠀⠀⣠⠀⠀⢸⣿⣿⣷⠀⠀⠀⠀⠙⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⡿⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⢀⣴⣿⡿⠁⠀⠀⠀⠀⠀⠀⣴⣿⠀⠀⢸⣿⣿⣿⡆⠀⠀⠀⠀⠈⢿⣿⣿⣿⣿⣿
+⣿⣿⡿⠋⠀⠀⣀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣐⣮⣵⡿⠟⠉⠀⠀⠀⠀⠀⠀⠀⣼⣿⣿⠀⠀⢸⣿⣿⣿⣿⠀⠀⠀⠀⠑⡀⠙⢿⣿⣿⣿
+⣿⡿⠀⣠⠾⠋⠀⠀⠀⢀⣠⣴⣾⣿⣿⣿⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⠀⠀⠀⣿⣿⣿⣿⡀⡀⠀⠀⠀⠈⠀⠀⠙⢿⣿
+⡟⠀⠀⠁⠀⠀⠀⢠⣶⣿⣿⣿⣿⣿⣿⣯⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⣿⣿⠀⠀⠀⢙⣛⡻⣿⣷⢸⡄⠀⠀⠀⠀⠀⠀⠀⠙
+⠁⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⣿⣿⣿⣿⣯⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠀⠈⣿⣿⢸⣿⣷⡳⠀⠀⠀⠀⠀⠀⠀⠀
+⡀⠀⠀⠀⠀⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣯⠀⠀⠀⠀⠀⠰⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠹⢋⣾⣿⣿⣿⣦⡀⠀⠀⠀⠀⠀⠀
+⡗⠀⠀⠀⠀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣆⡀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⢠⣈⡁⠀⠀⠀⠀⢙⣻⣿⣿⣿⣿⣿⡄⢧⡀⠀⠀⠀
+⡇⠀⠀⠀⠀⠙⠿⣿⣿⣿⣿⡿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣧⡀⠀⠀⢀⡐⣬⣿⣿⣿⣿⣿⣿⡘⣿⡄⠀⠀
+⡇⢠⠀⠀⠀⠀⣄⣀⣉⣭⣵⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣾⣿⣧⣽⣿⣿⣿⣿⣿⣿⣿⣿⣿⡘⢿⠀⠀
+⣿⡌⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠀⠃⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⡀⠀
+⣿⣿⣄⠀⠀⠀⠀⠈⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠐⠀⠀⢰⠀⠀⠨⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀
+⣿⣿⣿⣿⣦⠀⠀⠀⠀⠈⠛⠿⣿⣿⣿⣿⣿⡿⣫⣿⣿⣿⣿⣿⣧⠀⠀⠀⡀⠀⠀⠈⠛⠀⠈⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡀
+⣿⣿⣿⣿⣿⣧⡀⠈⢶⣤⣤⣀⣀⣤⣀⣤⣶⣾⣿⣿⣿⣿⣿⣿⣿⣆⣀⡀⢀⠀⠀⢤⣄⠀⠀⢺⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇
+⣿⣿⣿⣿⣿⣿⣿⣶⣤⣉⠻⠿⠿⠿⢛⣵⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡀⠀⠀⠀⠉⠆⠀⠀⢻⣿⣿⣿⣿⠏⣴⣿⣿⣿⣿⣿⣿⠁
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⡀⠀⠀⠀⢄⣠⣿⣿⣿⣿⣿⡀⠻⣿⣿⣿⣿⠿⠋⠀
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣄⠀⠀⠘⣿⣿⣿⣿⣟⣿⣷⣤⣬⣉⣉⠁⠀⠀⠀
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⢹⣿⣿⣿⣿⣦⣍⣉⠉⠉⠀⢀⣀⣤⣾
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠻⠛⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀⠀⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣆⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+======================================================================]]
 
--- 查找外设 (增加错误提示)
-local gear = peripheral.find("Create_RotationSpeedController")
-local cannon = peripheral.find("cbc_cannon_mount")
-
-if not gear then error("Motor not found! Check 'Create_RotationSpeedController'") end
-if not cannon then error("Cannon not found! Check 'cbc_cannon_mount'") end
-
--- 全局控制变量
-local targetPitch = 0
-local debugSpeed = 0 -- 用于UI显示当前指令速度
-
 -- ==========================================
--- 2. 火炮控制循环 (后台进程)
+-- 基础配置
 -- ==========================================
-local function resetAngelRange(angle)
-    local function copysign(n1, n2)
-        n1 = math.abs(n1)
-        return n2 > 0 and n1 or -n1
-    end
-    if (math.abs(angle) > 180) then
-        angle = math.abs(angle) >= 360 and angle % 360 or angle
-        return -copysign(360 - math.abs(angle), angle)
-    else
-        return angle
+local CONFIG_FILE = "cbc_config.txt"
+local cannons = {}     
+local globalParams = { n="4", k="12", g="0.05", lambda="0.01" }
+-- cannonConfigs 存储核心数据: [id] = { name="Gun-1", h="10" }
+local cannonConfigs = {} 
+
+-- 加载配置
+local function loadConfig()
+    if fs.exists(CONFIG_FILE) then
+        local file = fs.open(CONFIG_FILE, "r")
+        if file then
+            local data = textutils.unserialize(file.readAll()) or {}
+            file.close()
+            -- 恢复全局参数
+            if data.params then globalParams = data.params end
+            -- 恢复火炮独立参数 (Name, H)
+            if data.cannons then cannonConfigs = data.cannons end
+        end
     end
 end
 
-local function controlLoop()
-    while true do
-        local currentPitch = cannon.getPitch()
-        
-        -- 计算误差
-        local errorVal = 0
-        if INVERT_PITCH then
-            errorVal = resetAngelRange(targetPitch - currentPitch)
-        else
-            errorVal = resetAngelRange(currentPitch - targetPitch)
-        end
-
-        -- 死区检测
-        if math.abs(errorVal) < 0.05 then
-            gear.setTargetSpeed(0)
-            debugSpeed = 0
-        else
-            -- P控制计算
-            local speed = math.floor(errorVal * ANGLE_TO_SPEED / 2 + 0.5)
-            
-            -- 速度限制
-            local function copysign(n1, n2) return n2>0 and math.abs(n1) or -math.abs(n1) end
-            if math.abs(speed) > MAX_SPEED then
-                speed = copysign(MAX_SPEED, speed)
-            end
-            
-            gear.setTargetSpeed(speed)
-            debugSpeed = speed
-        end
-        
-        sleep(0.05) -- 20 ticks/sec
+-- 保存配置
+local function saveConfig()
+    local data = { params = globalParams, cannons = cannonConfigs }
+    local file = fs.open(CONFIG_FILE, "w")
+    if file then
+        file.write(textutils.serialize(data))
+        file.close()
     end
 end
 
 -- ==========================================
--- 3. UI 框架 (UI Framework)
+-- 运算核心
+-- ==========================================
+local function calculateHeight(x, theta_deg, n, k, h, g, lambda)
+    if lambda <= 0.0001 then lambda = 0.0001 end 
+    local rad = math.rad(theta_deg)
+    local cos_t = math.cos(rad)
+    local sin_t = math.sin(rad)
+    if math.abs(cos_t) < 0.0001 then return nil end
+    local tan_t = sin_t / cos_t
+    local dx = x - k * cos_t
+    local inner = 1 - (lambda * dx) / (n * cos_t)
+    if inner <= 0.00001 then return -math.huge end 
+    local term_linear = dx * (tan_t + g / (n * lambda * cos_t))
+    local log_drag = math.log(1 - lambda)
+    local time_ticks = math.log(inner) / log_drag
+    local term_gravity = - (g / lambda) * time_ticks
+    return h + k * sin_t + term_linear + term_gravity
+end
+
+local function solveDistance(theta_deg, n, k, h, g, lambda)
+    theta_deg = math.abs(theta_deg) % 360
+    if theta_deg > 90 and theta_deg < 270 then return 0 end 
+    local rad = math.rad(theta_deg)
+    local cosv = math.cos(rad)
+    if math.abs(cosv) < 0.0001 then return 0 end
+    local x_limit = (n / lambda) * cosv + k * cosv
+    if x_limit < 0 then return 0 end
+    local min_x = 0; local max_x = x_limit - 0.01
+    local y_start = calculateHeight(0.1, theta_deg, n, k, h, g, lambda)
+    if y_start and y_start < 0 then return 0 end
+    for i = 1, 15 do 
+        local mid_x = (min_x + max_x) / 2
+        local y = calculateHeight(mid_x, theta_deg, n, k, h, g, lambda)
+        if y == -math.huge then max_x = mid_x elseif y > 0 then min_x = mid_x else max_x = mid_x end
+    end
+    return (min_x + max_x) / 2
+end
+
+local function findMaxRange(n, k, h, g, lambda)
+    local maxDist = 0; local bestAngle = 0
+    for a = 10, 60, 2 do 
+        local d = solveDistance(a, n, k, h, g, lambda)
+        if d > maxDist then maxDist = d; bestAngle = a end
+    end
+    for a = bestAngle - 2, bestAngle + 2, 0.5 do
+         local d = solveDistance(a, n, k, h, g, lambda)
+         if d > maxDist then maxDist = d; bestAngle = a end
+    end
+    return maxDist, bestAngle
+end
+
+-- ==========================================
+-- UI 组件
 -- ==========================================
 local termUtil = {cpX=1, cpY=1}
-local absTextField = {x=1, y=1, len=15, text="", textCorlor="0", backgroundColor="8"}
+local activeField = nil 
+local fieldList = {}
 
-function absTextField:paint() 
-    local str = ""
-    local rawVal = self.key[self.value] or ""
-    local text = tostring(rawVal)
-    for i=1, self.len, 1 do 
-        local tmp = string.sub(text, i, i)
-        str = str .. (#tmp > 0 and tmp or " ")
-    end
-    if #str < self.len then str = str .. string.rep(" ", self.len - #str) end
+local TextField = {}
+TextField.__index = TextField
+
+function TextField.new(dataRef, key, x, y, len, isNum)
+    return setmetatable({
+        data = dataRef, key = key, 
+        x = x, y = y, len = len, 
+        isNum = isNum,
+        txtColor = colors.white,
+        bgColor = colors.black
+    }, TextField)
+end
+
+function TextField:paint()
+    local rawVal = tostring(self.data[self.key] or "")
+    local isActive = (activeField == self)
+    
+    local fg = self.txtColor
+    local bg = self.bgColor
+    if isActive then bg = colors.gray; fg = colors.white end
+    if not self.isNum and not isActive then fg = colors.cyan end 
+    if self.key == "h" and not isActive then fg = colors.yellow end
+
+    local displayStr = rawVal
+    if #rawVal > self.len then displayStr = string.sub(rawVal, #rawVal - self.len + 1) end
+    local paddedStr = displayStr .. string.rep(" ", math.max(0, self.len - #displayStr))
+    
     term.setCursorPos(self.x, self.y)
-    term.blit(str, string.rep(self.textCorlor, #str), string.rep(self.backgroundColor, #str))
+    term.blit(
+        paddedStr,
+        string.rep(string.format("%x", math.log(fg, 2)), self.len),
+        string.rep(string.format("%x", math.log(bg, 2)), self.len)
+    )
 end
 
-function absTextField:inputChar(char) 
-    local xPos, _ = term.getCursorPos()
-    xPos = xPos - self.x + 1
-    local field = tostring(self.key[self.value] or "")
-    if #field < self.len then
-        if (char >= '0' and char <= '9') or char == '.' or char == '-' then
-            local isValid = true
-            if char == '.' and string.find(field, "%.") then isValid = false end
-            if char == '-' and (xPos ~= 1 or string.find(field, "-")) then isValid = false end
-            if isValid then
-                self.key[self.value] = string.sub(field, 1, xPos-1) .. char .. string.sub(field, xPos, #field)
-                termUtil.cpX = termUtil.cpX + 1
-                return true -- 指示发生了更改
-            end
-        end
-    end
-    return false
-end
-
-function absTextField:inputKey(key) 
-    local xPos, _ = term.getCursorPos()
-    local field = tostring(self.key[self.value] or "")
-    if key == 259 and xPos > self.x then -- Backspace
-        termUtil.cpX = termUtil.cpX - 1
-        if #field > 0 then
-            local idx = termUtil.cpX - self.x + 1
-            self.key[self.value] = string.sub(field, 1, idx-1) .. string.sub(field, idx+1, #field)
-            return true
-        end
-    elseif key == 262 then 
-        termUtil.cpX = math.min(termUtil.cpX + 1, self.x + #field)
-    elseif key == 263 then 
-        termUtil.cpX = math.max(termUtil.cpX - 1, self.x)
-    end
-    return false
-end
-
-function absTextField:click(x, y) 
-    local textLen = #tostring(self.key[self.value] or "")
-    termUtil.cpX = math.min(x, self.x + textLen)
-    termUtil.cpY = y 
+function TextField:click(x, y)
+    activeField = self
+    local val = tostring(self.data[self.key] or "")
+    local relX = x - self.x
+    if relX > #val then relX = #val end
+    termUtil.cpX = self.x + relX
+    termUtil.cpY = self.y
     return true
 end
 
-local function newTextField(key, value, x, y, len) 
-    return setmetatable({key=key, value=value, x=x, y=y, len=len}, {__index=absTextField})
-end
-
--- ==========================================
--- 4. 数学逻辑 (Math Logic)
--- ==========================================
-local function height(t, x, n, k, h)
-    local rad = t * math.pi / 180
-    local cosv = math.cos(rad)
-    if cosv == 0 then return nil end
-    local sec = 1 / cosv
-    local inner = 1 - ((x * sec) - k) / (100 * n)
-    if inner <= 0 then return nil end
-    return ((14 * sec) / n + math.tan(rad)) * x + 1400 * math.log(inner) - (14 * k) / n + h
-end
-
-local function solveBisection(x, n, k, h, a, b)
-    local fa = height(a, x, n, k, h)
-    local fb = height(b, x, n, k, h)
-    if not fa or not fb or fa * fb > 0 then return nil end
-    for i = 1, 40 do
-        local m = 0.5 * (a + b)
-        local fm = height(m, x, n, k, h)
-        if not fm then b=m; fb=fm elseif fa*fm <= 0 then b=m; fb=fm else a=m; fa=fm end
+function TextField:inputChar(char)
+    local val = tostring(self.data[self.key] or "")
+    if #val < self.len + 5 then 
+        if self.isNum and not (char:match("[%d%.%-]")) then return false end
+        local relX = termUtil.cpX - self.x + 1 
+        local newVal = string.sub(val, 1, relX - 1) .. char .. string.sub(val, relX)
+        self.data[self.key] = newVal
+        termUtil.cpX = termUtil.cpX + 1
+        return true
     end
-    return 0.5 * (a + b)
+    return false
 end
 
-local function findSolutions(x, n, k, h)
-    local sols = {}
-    local prevT, prevY = nil, nil
-    for t = 1, 89, 1 do
-        local y = height(t, x, n, k, h)
-        if y then
-            if prevY and prevY * y < 0 then
-                local root = solveBisection(x, n, k, h, prevT, t)
-                if root then table.insert(sols, root) end
-            end
-            prevT, prevY = t, y
-        else prevT, prevY = nil, nil end
-    end
-    table.sort(sols)
-    return sols
-end
+function TextField:inputKey(key)
+    local val = tostring(self.data[self.key] or "")
+    local relX = termUtil.cpX - self.x + 1 
 
-local function calculateMaxRange(n, k, h)
-    local minDist, maxDist = 0, 100 * n + k
-    for i = 1, 15 do
-        local mid = (minDist + maxDist) / 2
-        if #findSolutions(mid, n, k, h) > 0 then minDist = mid else maxDist = mid end
-    end
-    return minDist
-end
-
--- ==========================================
--- 5. 主界面逻辑 (UI Loop)
--- ==========================================
-local properties = { n = "1", k = "0", x = "100", h = "2" }
-
-local function runUI()
-    local fieldTb = {
-        newTextField(properties, "n", 12, 4, 10),
-        newTextField(properties, "k", 12, 5, 10),
-        newTextField(properties, "x", 12, 6, 10),
-        newTextField(properties, "h", 12, 7, 10)
-    }
-    local lastState = {n=nil, k=nil, h=nil}
-    local cachedMaxRange = 0
-    
-    -- 初始化屏幕和光标
-    term.clear()
-    term.setCursorBlink(true) -- 【修复】开启光标闪烁
-    
-    -- 定义重绘函数
-    local function redraw()
-        -- 绘制静态文本
-        term.setBackgroundColor(colors.black)
-        term.setTextColor(colors.white)
-        term.setCursorPos(1, 1); term.clearLine()
-        term.setTextColor(colors.yellow); term.write("=== Auto Fire Control ===")
-        
-        -- 绘制电机状态
-        term.setCursorPos(28, 1)
-        if math.abs(debugSpeed) > 0 then
-            term.setTextColor(colors.orange); term.write("[MOVING]")
-        else
-            term.setTextColor(colors.gray); term.write("[IDLE]  ")
+    if key == keys.backspace then 
+        if relX > 1 then
+            local newVal = string.sub(val, 1, relX - 2) .. string.sub(val, relX)
+            self.data[self.key] = newVal
+            termUtil.cpX = termUtil.cpX - 1
+            return true
         end
-        term.setTextColor(colors.white)
-
-        term.setCursorPos(2, 4); term.write("Param n :")
-        term.setCursorPos(2, 5); term.write("Param k :")
-        term.setCursorPos(2, 6); term.write("Dist  x :")
-        term.setCursorPos(2, 7); term.write("Height h:")
-        term.setCursorPos(1, 9); term.write(string.rep("-", 40))
-
-        -- 绘制输入框
-        for _, v in pairs(fieldTb) do v:paint() end
-        
-        -- 计算部分
-        local nVal = tonumber(properties.n)
-        local kVal = tonumber(properties.k)
-        local hVal = tonumber(properties.h)
-        local xVal = tonumber(properties.x)
-        
-        -- 最大射程更新
-        if nVal and kVal and hVal and nVal > 0 then
-            if nVal ~= lastState.n or kVal ~= lastState.k or hVal ~= lastState.h then
-                term.setCursorPos(2, 8); term.write("Calc Max...") 
-                cachedMaxRange = calculateMaxRange(nVal, kVal, hVal)
-                lastState.n, lastState.k, lastState.h = nVal, kVal, hVal
-                term.setCursorPos(2, 8); term.clearLine() 
-            end
-            term.setCursorPos(2, 8); term.setTextColor(colors.cyan)
-            term.write(string.format("Max Range: %.1f", cachedMaxRange))
-        else
-            cachedMaxRange = 0
+    elseif key == keys.delete then 
+        if relX <= #val then
+            local newVal = string.sub(val, 1, relX - 1) .. string.sub(val, relX + 1)
+            self.data[self.key] = newVal
+            return true
         end
-        
-        -- 解算与控制
-        term.setCursorPos(2, 10); term.setTextColor(colors.white); term.write("Target: ")
-        
-        if nVal and kVal and xVal and hVal and nVal > 0 then
-            if xVal > cachedMaxRange then
-                term.setTextColor(colors.red); term.write("OUT OF RANGE!  ")
-                targetPitch = 0 
-            else
-                local sols = findSolutions(xVal, nVal, kVal, hVal)
-                if #sols > 0 then
-                    local angle = sols[1] -- 默认低弹道
-                    if angle > 45 then 
-                         term.setTextColor(colors.orange)
-                         term.write("Angle > 45! (Wait)")
-                         -- 即使大于45度也更新目标，让用户决定是否通过 n 调整
-                         targetPitch = angle 
-                    else
-                        targetPitch = angle -- 【关键】更新全局目标角度
-                        term.setTextColor(colors.lime)
-                        term.write(string.format("%.4f deg [AUTO]", angle))
-                    end
+    elseif key == keys.left then
+        if termUtil.cpX > self.x then termUtil.cpX = termUtil.cpX - 1; return true end
+    elseif key == keys.right then
+        if termUtil.cpX < self.x + #val and termUtil.cpX < self.x + self.len - 1 then
+            termUtil.cpX = termUtil.cpX + 1; return true
+        end
+    elseif key == keys.enter then
+        activeField = nil 
+        saveConfig()
+        return true
+    end
+    return false
+end
+
+-- ==========================================
+-- 储存逻辑
+-- ==========================================
+
+local function scanCannons()
+    cannons = {}
+    local periphs = peripheral.getNames()
+    for _, name in pairs(periphs) do
+        if string.find(name, "cbc_cannon") or string.find(name, "mount") then
+            local mount = peripheral.wrap(name)
+            if mount and mount.getPitch then
+                -- 如果配置中已有该ID,则加载名字和H,否则创建默认值
+                if not cannonConfigs[name] then
+                    cannonConfigs[name] = { name = "Gun-"..(string.match(name, "%d+") or "?"), h = "0" }
                 else
-                    term.setTextColor(colors.red); term.write("No Solution.   ")
+                    -- 确保旧配置也有h字段
+                    if not cannonConfigs[name].h then cannonConfigs[name].h = "0" end
                 end
+                table.insert(cannons, { id = name, hw = mount })
             end
-        else
-            term.setTextColor(colors.gray); term.write("Waiting Input...")
         end
-        
-        -- 显示底部调试信息
-        term.setCursorPos(2, 12); term.setTextColor(colors.lightGray)
-        term.clearLine()
-        term.write(string.format("C:%.2f T:%.2f Spd:%d", cannon.getPitch(), targetPitch, debugSpeed))
+    end
+    table.sort(cannons, function(a,b) return a.id < b.id end)
+end
 
-        -- 恢复光标到输入框位置
-        term.setTextColor(colors.white)
-        term.setCursorPos(termUtil.cpX, termUtil.cpY)
+-- 手动清理
+local function manualCleanup()
+    local w, h = term.getSize()
+    term.setCursorPos(1, h)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.orange)
+    term.write("Cleaning up data...")
+    
+    local presentDevices = {}
+    for _, name in pairs(peripheral.getNames()) do
+        presentDevices[name] = true
+    end
+    
+    local removedCount = 0
+    local dirty = false
+    
+    -- 遍历保存的配置，删除不在当前连接列表中的项
+    for id, _ in pairs(cannonConfigs) do
+        -- 只检查像是火炮ID的项
+        if (id:find("cbc_cannon") or id:find("mount")) and not presentDevices[id] then
+            cannonConfigs[id] = nil
+            dirty = true
+            removedCount = removedCount + 1
+        end
+    end
+    
+    if dirty then
+        saveConfig()
+        term.setCursorPos(1, h)
+        term.clearLine()
+        term.setTextColor(colors.lime)
+        term.write("Removed " .. removedCount .. " old entries.")
+    else
+        term.setCursorPos(1, h)
+        term.clearLine()
+        term.setTextColor(colors.lightGray)
+        term.write("Nothing to clean.")
+    end
+    sleep(1.0)
+end
+
+-- ==========================================
+-- UI绘制
+-- ==========================================
+local function initFields()
+    fieldList = {}
+    table.insert(fieldList, TextField.new(globalParams, "n", 12, 3, 8, true))
+    table.insert(fieldList, TextField.new(globalParams, "k", 12, 4, 8, true))
+    table.insert(fieldList, TextField.new(globalParams, "g", 30, 3, 8, true))
+    table.insert(fieldList, TextField.new(globalParams, "lambda", 30, 4, 8, true))
+    
+    for i, c in ipairs(cannons) do
+        local config = cannonConfigs[c.id]
+        table.insert(fieldList, TextField.new(config, "name", 6, 9+i, 9, false))
+        table.insert(fieldList, TextField.new(config, "h", 19, 9+i, 5, true))
+    end
+end
+
+local function drawTerminal()
+    local w, h = term.getSize()
+    term.setBackgroundColor(colors.black)
+    term.clear()
+    
+    term.setCursorPos(1,1); term.setTextColor(colors.yellow)
+    term.write("Fire Control")
+    term.setCursorPos(1, 7); term.setTextColor(colors.gray)
+    term.write(string.rep("-", w))
+    
+    term.setTextColor(colors.white)
+    term.setCursorPos(2,3); term.write("Charges:") 
+    term.setCursorPos(2,4); term.write("Barrel :") 
+    term.setCursorPos(21,3); term.write("Gravity:") 
+    term.setCursorPos(21,4); term.write("Drag   :") 
+    
+    term.setCursorPos(1, 8); term.setTextColor(colors.lightGray)
+    term.write(" #  | Name     | High")
+    term.setCursorPos(1, 9); term.setTextColor(colors.gray)
+    term.write(string.rep("-", w))
+    
+    for i, c in ipairs(cannons) do
+        local y = 9 + i
+        if y > h then break end
+        term.setCursorPos(2, y); term.setTextColor(colors.gray)
+        term.write(string.format("%d  |", i))
+        term.setCursorPos(16, y); term.write("|")
+    end
+    
+    for _, f in pairs(fieldList) do f:paint() end
+    
+    -- 底部提示
+    if not activeField then
+        term.setCursorPos(1, h)
+        term.setTextColor(colors.gray)
+        term.write("Press 'C' to clean unused data")
     end
 
-    -- 首次绘制
-    redraw()
+    if activeField then
+        term.setTextColor(colors.white) -- 强制白色光标
+        term.setCursorPos(termUtil.cpX, termUtil.cpY)
+        term.setCursorBlink(true)
+    else
+        term.setCursorBlink(false)
+    end
+end
+
+local function drawMonitor()
+    local mon = peripheral.find("monitor")
+    if not mon then return end
+    mon.setTextScale(1) 
+    local w, h = mon.getSize()
+    mon.setBackgroundColor(colors.black)
+    mon.clear()
     
-    local refreshTimer = os.startTimer(0.2) -- 降低刷新频率到 5fps，节省性能
+    local nVal = tonumber(globalParams.n) or 0
+    local kVal = tonumber(globalParams.k) or 0
+    local gVal = tonumber(globalParams.g) or 0.05
+    local lVal = tonumber(globalParams.lambda) or 0.01
+    local velocity = nVal * 2 
+    
+    mon.setCursorPos(1, 1); mon.setTextColor(colors.gray)
+    mon.write("NAME    ANG   DIST  MAX(Ang)")
+    mon.setCursorPos(1, 2); mon.write(string.rep("-", w))
+    
+    for i, c in ipairs(cannons) do
+        local y = i + 2
+        if y > h then break end
+        local config = cannonConfigs[c.id]
+        local hVal = tonumber(config.h) or 0
+        
+        local name = config.name
+        if #name > 7 then name = string.sub(name, 1, 7) end
+        mon.setCursorPos(1, y); mon.setTextColor(colors.white)
+        mon.write(name)
+        
+        local pitch = 0
+        pcall(function() pitch = c.hw.getPitch() end)
+        mon.setCursorPos(9, y); mon.setTextColor(colors.lightBlue)
+        mon.write(string.format("%4.1f", pitch))
+        
+        mon.setCursorPos(15, y)
+        if nVal > 0 then
+            local dist = solveDistance(pitch, velocity, kVal, hVal, gVal, lVal)
+            if dist > 0 then
+                mon.setTextColor(colors.lime)
+                mon.write(string.format("%.0fm", dist))
+            else
+                mon.setTextColor(colors.red)
+                mon.write("MISS")
+            end
+            local maxD, bestA = findMaxRange(velocity, kVal, hVal, gVal, lVal)
+            mon.setCursorPos(21, y); mon.setTextColor(colors.yellow)
+            mon.write(string.format("%.0f(%.0f)", maxD, bestA))
+        else
+            mon.setTextColor(colors.gray); mon.write("WAIT")
+        end
+    end
+end
+
+-- ==========================================
+-- 主程序入口
+-- ==========================================
+local function main()
+    loadConfig() 
+    scanCannons()
+    initFields()
+    
+    drawTerminal()
+    drawMonitor()
+    
+    local timerId = os.startTimer(0.1)
     
     while true do
-        local eventData = {os.pullEvent()}
-        local event = eventData[1]
-        local shouldRedraw = false
+        local e = {os.pullEvent()}
+        local evt = e[1]
+        local shouldRedrawTerm = false
         
-        if event == "timer" then
-            -- 【修复】只有当是我们自己的刷新定时器时，才重绘
-            if eventData[2] == refreshTimer then
-                shouldRedraw = true
-                refreshTimer = os.startTimer(0.2)
-            end
-            -- 如果是其他 timer (比如 controlLoop 的 sleep)，直接忽略，不重绘
+        if evt == "timer" and e[2] == timerId then
+            drawMonitor() 
+            if not activeField then drawTerminal() end
+            timerId = os.startTimer(0.1)
             
-        elseif event == "mouse_click" then
-            local x, y = eventData[3], eventData[4]
-            for _, v in pairs(fieldTb) do 
-                if y == v.y and x >= v.x and x <= v.x + v.len then 
-                    v:click(x, y)
-                    shouldRedraw = true
-                end 
+        elseif evt == "mouse_click" then
+            local x, y = e[3], e[4]
+            activeField = nil 
+            for _, f in pairs(fieldList) do
+                if y == f.y and x >= f.x and x < f.x + f.len then
+                    if f:click(x, y) then shouldRedrawTerm = true end
+                    break
+                end
+            end
+            shouldRedrawTerm = true
+            
+        elseif evt == "key" then
+            local key = e[2]
+            if activeField then
+                -- 正在输入时，处理输入逻辑
+                if activeField:inputKey(key) then 
+                    saveConfig() -- 实时保存每次按键修改
+                    shouldRedrawTerm = true 
+                end
+            else
+                -- 未输入时，按下 'C' 触发清理
+                if key == keys.c then
+                    manualCleanup()
+                    scanCannons() -- 清理后重新扫描
+                    initFields()  -- 重新绑定输入框
+                    shouldRedrawTerm = true
+                end
             end
             
-        elseif event == "key" then
-            local key = eventData[2]
-            for _, v in pairs(fieldTb) do 
-                if termUtil.cpY == v.y and termUtil.cpX >= v.x and termUtil.cpX <= v.x + v.len + 1 then 
-                    if v:inputKey(key) then shouldRedraw = true end
-                end 
+        elseif evt == "char" then
+            local char = e[2]
+            if activeField then
+                if activeField:inputChar(char) then 
+                    saveConfig() -- 实时保存输入字符
+                    shouldRedrawTerm = true 
+                end
             end
-            shouldRedraw = true -- 按键总是触发重绘以更新光标
             
-        elseif event == "char" then
-            local char = eventData[2]
-            for _, v in pairs(fieldTb) do 
-                if termUtil.cpY == v.y and termUtil.cpX >= v.x and termUtil.cpX <= v.x + v.len + 1 then 
-                    if v:inputChar(char) then shouldRedraw = true end
-                end 
-            end
+        elseif evt == "peripheral" or evt == "peripheral_detach" then
+            scanCannons()
+            initFields()
+            shouldRedrawTerm = true
         end
         
-        if shouldRedraw then
-            redraw()
+        if shouldRedrawTerm then
+            drawTerminal()
         end
     end
 end
 
--- ==========================================
--- 6. 程序入口
--- ==========================================
-parallel.waitForAll(runUI, controlLoop)
+term.clear()
+print("System Initializing v16...")
+main()
