@@ -1,7 +1,8 @@
 部署代码（直接输入电脑，能不能部署成功看服务器网络而不是我）
 wget https://raw.githubusercontent.com/rain6445/CBC-fireControl/refs/heads/main/fire%20control/%E6%B5%8B%E8%B7%9D%E4%BF%AF%E4%BB%B0/%E5%BC%B9%E9%81%93%E8%AE%A1%E7%AE%97%E5%99%A8/startup.lua
 
-部署进计算机后
+
+部署进计算机后：
 上面四项分别为
 装药（速度请除以40后输入）                                        重力系数
 炮管长度（实际长度，有缩放请乘以缩放倍数）          阻力系数（1-实际阻力）
