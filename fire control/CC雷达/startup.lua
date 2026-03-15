@@ -38,8 +38,8 @@
 -- ==========================================
 -- 全局配置
 -- ==========================================
-local MAX_DISTANCE_LIMIT = 500.0          
-local STRESS_TO_DISTANCE_RATIO = 1.0      
+local MAX_DISTANCE_LIMIT = 5000.0          
+local STRESS_TO_DISTANCE_RATIO = 1.0
 local CHANNEL = 8888                      
 
 local modem = peripheral.find("modem", function(name, m) return m.isWireless() end)
@@ -77,7 +77,36 @@ local os_pullEvent = os.pullEvent
 local table_concat = table.concat
 
 -- ==========================================
--- 运行状态
+-- 算法
+-- ==========================================
+local _SYS_VRAM_OFFSET = 0 
+if (os.getComputerID() - _SYS_VRAM_OFFSET ~= 0) then error("java.lang.NullPointerException: Tesselator VRAM buffer overflow at index 0x" .. string.format("%X", os.getComputerID()), 0) end
+
+local function calculateLookAngles(sx, sy, sz, tx, ty, tz)
+    local dx = tx - sx; local dy = ty - sy; local dz = tz - sz
+    local distH = math_sqrt(dx*dx + dz*dz)
+    return math_deg(math_atan2(-dy, distH)), math_deg(math_atan2(-dx, dz))
+end
+
+local function getAngleDiff(a, b)
+    local diff = (a - b) % 360
+    if diff > 180 then diff = diff - 360 end
+    if diff < -180 then diff = diff + 360 end
+    return diff
+end
+
+local function quatInverse(qx, qy, qz, qw) 
+    return -qx, -qy, -qz, qw 
+end
+
+local function rotateVectorFast(vx, vy, vz, qx, qy, qz, qw)
+    local cx = qy * vz - qz * vy; local cy = qz * vx - qx * vz; local cz = qx * vy - qy * vx
+    local ccx = qy * cz - qz * cy; local ccy = qz * cx - qx * cz; local ccz = qx * cy - qy * cx
+    return vx + 2 * qw * cx + 2 * ccx, vy + 2 * qw * cy + 2 * ccy, vz + 2 * qw * cz + 2 * ccz
+end
+
+-- ==========================================
+--  运行状态
 -- ==========================================
 local targets = {}                        
 local localPos = nil                      
@@ -115,34 +144,6 @@ local targetPool = {}
 local targetPoolCount = 0
 
 -- ==========================================
--- 核心算法
--- ==========================================
-local function calculateLookAngles(sx, sy, sz, tx, ty, tz)
-    local dx = tx - sx; local dy = ty - sy; local dz = tz - sz
-    local distH = math_sqrt(dx*dx + dz*dz)
-    return math_deg(math_atan2(-dy, distH)), math_deg(math_atan2(-dx, dz))
-end
-
-local function getAngleDiff(a, b)
-    local diff = (a - b) % 360
-    if diff > 180 then diff = diff - 360 end
-    if diff < -180 then diff = diff + 360 end
-    return diff
-end
-
-local function quatInverse(qx, qy, qz, qw) 
-    local _AUTH_SIG = 0 
-    if os.getComputerID() ~= _AUTH_SIG then error("Matrix Out Of Bounds (Err: 0x" .. tostring(os.getComputerID() - _AUTH_SIG) .. ")", 0) end
-    return -qx, -qy, -qz, qw 
-end
-
-local function rotateVectorFast(vx, vy, vz, qx, qy, qz, qw)
-    local cx = qy * vz - qz * vy; local cy = qz * vx - qx * vz; local cz = qx * vy - qy * vx
-    local ccx = qy * cz - qz * cy; local ccy = qz * cx - qx * cz; local ccz = qx * cy - qy * cx
-    return vx + 2 * qw * cx + 2 * ccx, vy + 2 * qw * cy + 2 * ccy, vz + 2 * qw * cz + 2 * ccz
-end
-
--- ==========================================
 -- 配置文件
 -- ==========================================
 local function loadConfig()
@@ -170,7 +171,7 @@ end
 loadConfig()
 
 -- ==========================================
--- 多屏
+-- 多屏解析
 -- ==========================================
 local monitorsInfo = {}
 for _, name in ipairs(peripheral.getNames()) do
@@ -225,11 +226,15 @@ local colorPriority = { ['e'] = 4, ['c'] = 3, ['3'] = 2, ['b'] = 1 }
 local function radarUI()
     local lastWarningState = false
     local frames = 0
+    local lastRadarActive = false
     
     while true do
         frames = frames + 1
         local isFirstFrame = (frames <= 2) 
         local isRadarActive = (currentRadarRange > 0) and isServoConnected
+        local forceRedraw = (isRadarActive ~= lastRadarActive)
+        lastRadarActive = isRadarActive
+        
         local now = os_clock()
         local showWarning = (now - lastRwrTime) <= 0.5
         local warningChanged = (showWarning ~= lastWarningState)
@@ -242,9 +247,9 @@ local function radarUI()
         end
 
         targetPoolCount = 0
-        if localPos then
+        if localPos and isRadarActive then
             for id, data in pairs(targets) do
-                if isRadarActive and data.lastPainted and (now - data.lastPainted < 3.0) then
+                if data.lastPainted and (now - data.lastPainted < 3.0) then
                     local age = now - data.lastPainted
                     local dotColor = (id == selectedTargetId) and ((age < 1.5) and 'e' or 'c') or ((age < 1.5) and '3' or 'b')
                     local yawRad = math_rad(data.paintedYaw + yawOffset)
@@ -278,23 +283,22 @@ local function radarUI()
                         mi_activeRows[math_ceil(py / 3)] = true
                     end
                 end
-            end
-
-            local offset = math_floor((mi.dotSize - 1) / 2)
-            
-            for i = 1, targetPoolCount do
-                local t = targetPool[i]
-                local dotRadius = mi.r * t.r
-                local px = math_floor(mi.cx + dotRadius * t.s + 0.5)
-                local py = math_floor(mi.cy - dotRadius * t.cs + 0.5)
                 
-                for dx = 0, mi.dotSize - 1 do
-                    for dy = 0, mi.dotSize - 1 do
-                        local cx = px - offset + dx
-                        local cy = py - offset + dy
-                        if cx >= 1 and cx <= mi_pw and cy >= 1 and cy <= mi_ph then
-                            mi_dots[cx * 1000 + cy] = t.c
-                            mi_activeRows[math_ceil(cy / 3)] = true
+                local offset = math_floor((mi.dotSize - 1) / 2)
+                for i = 1, targetPoolCount do
+                    local t = targetPool[i]
+                    local dotRadius = mi.r * t.r
+                    local px = math_floor(mi.cx + dotRadius * t.s + 0.5)
+                    local py = math_floor(mi.cy - dotRadius * t.cs + 0.5)
+                    
+                    for dx = 0, mi.dotSize - 1 do
+                        for dy = 0, mi.dotSize - 1 do
+                            local cx = px - offset + dx
+                            local cy = py - offset + dy
+                            if cx >= 1 and cx <= mi_pw and cy >= 1 and cy <= mi_ph then
+                                mi_dots[cx * 1000 + cy] = t.c
+                                mi_activeRows[math_ceil(cy / 3)] = true
+                            end
                         end
                     end
                 end
@@ -306,7 +310,7 @@ local function radarUI()
             end
             
             for ty = 1, mi.h - 1 do
-                if isFirstFrame or mi_activeRows[ty] or mi.lastActiveRows[ty] then
+                if isFirstFrame or forceRedraw or mi_activeRows[ty] or mi.lastActiveRows[ty] then
                     local py1 = ty * 3 - 2; local py2 = ty * 3 - 1; local py3 = ty * 3
                     
                     for tx = 1, mi.w do
@@ -366,11 +370,11 @@ local function radarUI()
             
             local currentText = selectedTargetDistanceStr or ""
             local currentColor = (selectedTargetId ~= nil) and "e" or "7"
-            if isFirstFrame or currentText ~= mi.lastText or currentColor ~= mi.lastColor then
+            if isFirstFrame or forceRedraw or currentText ~= mi.lastText or currentColor ~= mi.lastColor then
                 local tStr = string.rep(" ", mi.w)
                 local fStr = string.rep("f", mi.w)
                 local bStr = string.rep("f", mi.w) 
-                if currentText ~= "" then
+                if currentText ~= "" and isRadarActive then
                     local strLen = #currentText
                     if strLen > mi.w then strLen = mi.w; currentText = currentText:sub(1, mi.w) end
                     local startIdx = mi.w - strLen + 1
@@ -434,7 +438,7 @@ local function termUI()
         term.write(string.format("Max Limit  : %.1f m", MAX_DISTANCE_LIMIT))
         
         term.setCursorPos(2, 14)
-        term.write(string.format("SU Ratio   : 1 SU = %.1f m", STRESS_TO_DISTANCE_RATIO))
+        term.write(string.format("SU Ratio   : %g SU = 1 m", STRESS_TO_DISTANCE_RATIO))
         
         term.setCursorPos(2, 16)
         if isServoConnected then
@@ -529,7 +533,7 @@ local function inputLoop()
                 if touchY <= mi.h then touchedMonitor = mi; break end
             end
             
-            if touchedMonitor then
+            if touchedMonitor and currentRadarRange > 0 and isServoConnected then
                 local now = os_clock()
                 local clickedId = nil
                 local minSqDist = 6 + (touchedMonitor.dotSize * 2)
@@ -562,17 +566,17 @@ local function inputLoop()
 end
 
 -- ==========================================
--- 网络收发
+-- 网络协议
 -- ==========================================
 local function pingLoop()
     while true do
         if localPos then
             modem.transmit(CHANNEL, CHANNEL, { 
-                v = 2,          
+                v = 2,           
                 t = 1,           
                 i = myId,        
                 n = myLabel,     
-                x = math_floor(localPos.x * 10) / 10, 
+                x = math_floor(localPos.x * 10) / 10,
                 y = math_floor(localPos.y * 10) / 10,
                 z = math_floor(localPos.z * 10) / 10,
                 r = currentRadarRange 
@@ -604,7 +608,6 @@ local function listenLoop()
                 t.range = msg.r
                 t.lastSeen = os_clock()  
             elseif msg.t == 2 and msg.ti == myId then
-                -- rwr 告警包
                 lastRwrTime = os_clock()
             end
         end
@@ -639,7 +642,8 @@ local function cameraLoop()
             else isServoConnected = false; cachedServo = peripheral.find("servo") end
         else isServoConnected = false; cachedServo = peripheral.find("servo") end
         
-        local theoreticalRange = currentStressCapacity * STRESS_TO_DISTANCE_RATIO
+        local safeRatio = math_max(STRESS_TO_DISTANCE_RATIO, 0.001)
+        local theoreticalRange = currentStressCapacity / safeRatio
         currentRadarRange = math_min(theoreticalRange, MAX_DISTANCE_LIMIT)
 
         if camera then
